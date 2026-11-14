@@ -51,6 +51,7 @@
 ./gradlew :app:assembleDebug    # debug APK
 ./gradlew :app:assembleRelease  # release APK
 adb install -r app/build/outputs/apk/release/app-release.apk
+# 빌드하지 않고 제출용 APK를 바로 설치하려면: adb install -r apk/개인_Baton_release.apk
 adb shell am start -n app.baton.parking/.MainActivity
 ```
 
