@@ -9,14 +9,10 @@ import app.baton.core.signal.SignalSource
  */
 object SignalSourceProvider {
 
-    @Suppress("UNUSED_PARAMETER")
-    fun create(context: Context, clock: Clock): SignalSource {
-        // TODO(M1 후속): Pleos SDK 사용권 동의 뒤 여기서 PleosSignalSource(context)를 먼저 만들고,
-        //  SDK 초기화가 실패하면 아래 FakeSignalSource 로 내려간다. (PRD 6장)
-        //  - PleosSignalSource 는 Door / Seat / Safety(주차 브레이크 경고등) / Brake / 위치를 구독한다.
-        //  - currentSnapshot() 에서 신호마다 현재 값을 조회해 사용 가능/미지원/일시 불가를 가려 주고,
-        //    events 로는 그 뒤의 변경만(관측 시각·주차 세대를 붙여) 내보낸다. 콜백 등록은 수집이 취소될 때 푼다.
-        //  - SDK 호출은 PleosSignalSource 한 파일에만 둔다.
-        return FakeSignalSource(clock)
-    }
+    /**
+     * Pleos 차량 서비스가 있는 기기에서는 실제 차량 신호([PleosSignalSource])를, 없거나 SDK 초기화가 실패하면
+     * 모의 신호([FakeSignalSource])를 돌려준다(PRD 6장). SDK 호출은 PleosSignalSource 한 파일에만 둔다.
+     */
+    fun create(context: Context, clock: Clock): SignalSource =
+        PleosSignalSource.createOrNull(context, clock) ?: FakeSignalSource(clock)
 }

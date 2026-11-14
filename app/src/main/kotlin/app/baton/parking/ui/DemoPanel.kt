@@ -83,10 +83,15 @@ fun DemoPanel(state: BatonUiState, vm: BatonViewModel, modifier: Modifier = Modi
         }
 
         if (state.role == Role.LEAVING) {
-            Section("모의 신호 · 모의 위치")
+            Section(if (state.realVehicleSignals) "모의 위치" else "모의 신호 · 모의 위치")
             val s = state.fakeSignals
             if (s == null) {
                 Label("실제 신호 소스 사용 중: 스위치 없음")
+            } else if (state.realVehicleSignals) {
+                Label("문·착좌·벨트·브레이크는 ${state.signalSourceName}에서 읽는 중 (스위치 없음)")
+                SwitchRow("이동 (20m 벗어남)", s.moved) { vm.setMoved(it) }
+                SwitchRow("위치 정확도 낮음", s.lowQualityLocation) { vm.setLowQualityLocation(it) }
+                SwitchRow("위치 신호 끊김", s.locationLost) { vm.setLocationLost(it) }
             } else {
                 SwitchRow("운전석 문 열림", s.doorOpen) { vm.setDoorOpen(it) }
                 SwitchRow("운전석 착좌", s.seated) { vm.setSeated(it) }

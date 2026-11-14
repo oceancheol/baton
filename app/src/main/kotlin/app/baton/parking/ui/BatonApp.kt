@@ -75,6 +75,21 @@ private fun SourceStrip(state: BatonUiState, onTogglePanel: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if ("모의 신호" !in state.mockChips) {
+                Box(
+                    modifier = Modifier
+                        .background(BatonColors.Go, CircleShape)
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        state.signalSourceName,
+                        color = BatonColors.Bg,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                }
+            }
             state.mockChips.forEach { chip ->
                 Box(
                     modifier = Modifier
@@ -83,9 +98,6 @@ private fun SourceStrip(state: BatonUiState, onTogglePanel: () -> Unit) {
                 ) {
                     Text(chip, color = BatonColors.Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
-            }
-            if ("모의 신호" !in state.mockChips) {
-                Text("신호: ${state.signalSourceName}", color = BatonColors.Sub, fontSize = 12.sp, maxLines = 1)
             }
         }
         Box(

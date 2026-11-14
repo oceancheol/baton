@@ -52,6 +52,9 @@ android {
 dependencies {
     implementation(project(":core"))
 
+    // Pleos Connect 차량 SDK. 호출은 signal/PleosSignalSource.kt 한 파일에만 둔다.
+    implementation("ai.pleos.playground:Vehicle:2.3.2")
+
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")

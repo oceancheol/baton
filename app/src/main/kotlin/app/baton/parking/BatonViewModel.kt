@@ -22,6 +22,7 @@ import app.baton.core.signal.SignalReading
 import app.baton.core.signal.SignalSource
 import app.baton.parking.signal.FakeSignalSource
 import app.baton.parking.signal.FakeSignalState
+import app.baton.parking.signal.PleosSignalSource
 import app.baton.parking.signal.SignalSourceProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -102,6 +103,8 @@ data class BatonUiState(
     val parkedRow: Int = 3,
     // 시연 패널
     val fakeSignals: FakeSignalState? = null,
+    /** 차량 신호(문·착좌·벨트·브레이크)가 실제 SDK 값이면 true. 이때 패널에는 모의 위치 스위치만 남는다. */
+    val realVehicleSignals: Boolean = false,
     val runningScenario: String? = null,
     val observe: ObserveState = ObserveState(),
     val log: List<String> = emptyList(),
@@ -128,6 +131,9 @@ class BatonViewModel internal constructor(
     // 신호 소스 주입 지점은 SignalSourceProvider 한 곳이다.
     private val signalSource: SignalSource = SignalSourceProvider.create(application, clock)
     private val fakeSource: FakeSignalSource? = signalSource as? FakeSignalSource
+
+    /** 모의 위치를 맡는 곳. 모의 소스면 그 자신, 실제 차량 신호 소스면 그 안의 위치 전용 모의 소스. */
+    private val mockLocation: FakeSignalSource? = fakeSource ?: (signalSource as? PleosSignalSource)?.mockLocation
 
     private val machine = DepartureStateMachine(clock, signalSource.capabilities)
     private var coordinator = GuidanceCoordinator(clock, matchConfig)
@@ -170,7 +176,7 @@ class BatonViewModel internal constructor(
             }
         }
         viewModelScope.launch {
-            fakeSource?.state?.collect { refresh() }
+            mockLocation?.state?.collect { refresh() }
         }
         viewModelScope.launch {
             while (true) {
@@ -235,9 +241,9 @@ class BatonViewModel internal constructor(
     fun setBelted(v: Boolean) = fakeSource?.setBelted(v)
     fun setParkingBrakeOn(v: Boolean) = fakeSource?.setParkingBrakeOn(v)
     fun setPedalPressed(v: Boolean) = fakeSource?.setPedalPressed(v)
-    fun setMoved(v: Boolean) = fakeSource?.setMoved(v)
-    fun setLowQualityLocation(v: Boolean) = fakeSource?.setLowQualityLocation(v)
-    fun setLocationLost(v: Boolean) = fakeSource?.setLocationLost(v)
+    fun setMoved(v: Boolean) = mockLocation?.setMoved(v)
+    fun setLowQualityLocation(v: Boolean) = mockLocation?.setLowQualityLocation(v)
+    fun setLocationLost(v: Boolean) = mockLocation?.setLocationLost(v)
 
     /**
      * 나가는 차 화면의 "이번엔 예고 안 함". 차가 움직이는 중이면 화면에서 버튼이 꺼져 있고,
@@ -474,6 +480,8 @@ class BatonViewModel internal constructor(
             // 실제 신호 소스: 세대를 한 번 올려 옛 신호·옛 조회를 막고, 그 세대의 요청으로 현재 값을 읽어 복원한다.
             // 조회가 돌아오기 전에 주차가 또 바뀌면 세대가 달라져 그 답은 상태기계가 버린다.
             applyDeparture(machine.startNewParking())
+            // 모의 위치는 주차 지점으로 되돌린다(실제 차량 신호는 건드리지 않는다).
+            mockLocation?.resetToParked(machine.snapshot.value.parkingGeneration)
             viewModelScope.launch {
                 restoreFromSource()
                 refresh()
@@ -610,7 +618,8 @@ class BatonViewModel internal constructor(
             parkedElapsedSeconds = parkedElapsedSeconds,
             parkedZone = parkedZone,
             parkedRow = parkedRow,
-            fakeSignals = fakeSource?.state?.value,
+            fakeSignals = mockLocation?.state?.value,
+            realVehicleSignals = fakeSource == null,
             runningScenario = scenarioName,
             observe = observe(now),
             log = logLines.toList(),

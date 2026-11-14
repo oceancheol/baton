@@ -2,14 +2,14 @@
 
 주차장을 떠나는 차가 조작 없이 "곧 자리가 납니다"를 알리고, 가장 먼저 닿을 수 있는 차 한 대를 그 자리로 안내하는 차량용(Android Automotive, 가로 화면) 앱.
 
-현재 단계는 M1 뼈대다. 차량 SDK 없이 돌아가며, 차량 신호·위치·상대 차는 모두 앱 안의 모의 구현이다. 화면 맨 위 줄에 모의 요소를 하나씩 따로 표시한다(`모의 신호` / `모의 위치` / `모의 상대 차` / `시간 전진 +N초`).
+현재 단계는 M1이다. Pleos Connect 차량 서비스가 있는 기기(Pleos Connect 에뮬레이터)에서는 운전석 문·착좌·브레이크 페달·주차 브레이크 경고등을 Pleos Vehicle SDK로 실제로 읽고, 화면 맨 위 줄에 `Pleos 차량 신호`라고 표시한다. 차량 서비스가 없는 기기(일반 Android 에뮬레이터 등)에서는 차량 SDK 없이 돌아가며 차량 신호도 앱 안의 모의 구현이다(`모의 신호`). 위치와 상대 차는 어느 쪽에서든 모의 구현이다. 모의 요소는 맨 위 줄에 하나씩 따로 표시한다(`모의 신호` / `모의 위치` / `모의 상대 차` / `시간 전진 +N초`).
 
 ## 구성
 
 | 모듈 | 내용 |
 |---|---|
 | `:core` | 순수 Kotlin/JVM. Android 의존 없음. `signal`(신호 모델·상태, `SignalSource`), `departure`(출차 판정 상태기계), `match`(안내 순서 계산, 예고·안내 조정, 상태기계→안내 다리, 모의 상대 차) |
-| `:app` | Android, Jetpack Compose. 화면 4종(나가는 차 / 들어오는 차·대기 / 들어오는 차·우선 안내 / 주차 완료)과 시연 패널, `FakeSignalSource` |
+| `:app` | Android, Jetpack Compose. 화면 4종(나가는 차 / 들어오는 차·대기 / 들어오는 차·우선 안내 / 주차 완료)과 시연 패널, `PleosSignalSource`(Pleos Vehicle SDK), `FakeSignalSource`(모의) |
 
 출차 판정 (`DepartureStateMachine`)
 - `PARKED → BOARDING → ANNOUNCING → DEPARTING → VACATED`.
@@ -30,7 +30,7 @@
 기타
 - 모의 상대 차(`MockPeerService`)는 지난 구간을 예정 시각 순서대로 처리한다. 30초를 한 번에 건너뛰든 1초씩 30번 가든 결과가 같다. 안내가 발급되기 전 구간에는 이동을 적용하지 않고, 자리가 비기 전 구간에서는 도착 처리하지 않는다. 밖에서 들어오는 입력(신호·버튼·보고)은 그 시각까지 세계를 먼저 진행한 뒤에 적용한다.
 - 주차 위치·걸린 시간·기록은 메모리에만 둔다(앱을 끄면 지워진다). 기기 저장은 다음 단계다.
-- 신호 소스 주입 지점: `app/src/main/kotlin/app/baton/parking/signal/SignalSourceProvider.kt` 한 곳.
+- 신호 소스 주입 지점: `app/src/main/kotlin/app/baton/parking/signal/SignalSourceProvider.kt` 한 곳. Pleos 차량 서비스가 있으면 `PleosSignalSource`, 없거나 SDK 초기화가 실패하면 `FakeSignalSource`를 쓴다. SDK 호출은 `PleosSignalSource.kt` 한 파일에만 있다.
 
 ## 실행 방법
 
@@ -69,29 +69,59 @@ adb shell am start -n app.baton.parking/.MainActivity
 2. 약 6초 뒤(또는 `상대 차 출차 임박 당기기`) 우선 안내 화면으로 바뀌고 남은 초가 줄어든다.
 3. 도착하면 주차 완료 화면이 나온다. `지나침 (주차 안 함)`을 누르면 대기로 돌아간다. `상대 차 예고 추가`로 예고를 더 만들 수 있다.
 
+Pleos Connect 에뮬레이터에서 실제 차량 신호로 (Virtual Console)
+- 준비: `adb forward tcp:8088 tcp:8088` 뒤 브라우저에서 `http://127.0.0.1:8088/`(Virtual Console)를 열어 둔다. 앱 맨 위 줄에 `Pleos 차량 신호`가 보이면 실제 신호를 읽는 중이다. 이때 시연 패널에는 모의 위치 스위치만 남고, 고정 시나리오 중 차량 신호를 조작하는 세 개는 쓰지 않는다.
+- 시작 상태: 콘솔의 Safety > Telltales에서 Parking Brake를 On으로 둔다(주차 중).
+1. Door Position의 Front left를 Open → Close → BOARDING
+2. Seat Occupancy의 Driver를 Occupied → ANNOUNCING (에뮬레이터에서는 안전벨트를 빼고 착좌만으로 판정한다)
+3. Telltales의 Parking Brake를 Off, 또는 Brake Pedal을 0보다 크게 → DEPARTING
+4. 앱 시연 패널의 `이동 (20m 벗어남)`(모의 위치) → VACATED
+- 콘솔 화면 대신 같은 HTTP API를 직접 불러도 된다(브라우저를 열어 두지 않으면 먼저 `POST /browser/session?client=이름`을 1초마다 보내 콘솔을 활성 상태로 둔다): `PUT /vehicle/body?door_fl=true`, `PUT /vehicle/seat?kind=occupied&value=true&area=driver`, `PUT /vehicle/telltales/simulator?color=Red&state=Off&type=ParkingBrake`, `PUT /vehicle/controls?speed=0&accelerator=0&brake=60`.
+
 패널 아래 "관찰" 영역에 상대 차 ID, 진행 중인 안내와 끝난 안내(결과, 대기 시간 보존 여부), 세 측정값이 나온다.
 
 ## 테스트 환경과 필요한 설정
 
 확인 환경 (2026-11-14)
 
+| 항목 | Pleos Connect 에뮬레이터 | 일반 Android 에뮬레이터 |
+|---|---|---|
+| 에뮬레이터 | Pleos Connect v2.1.0 (API 34, arm64, user 빌드), 차량 서비스 `ai.pleos.playground.service.vehicle` 2.3.22 | Android Emulator, AOSP 기본 시스템 이미지 Android 14 (API 34) arm64-v8a |
+| 화면 규격 | 2560×1440 가로 (앱은 홈 화면 오른쪽 분할 영역에 뜬다) | 기기 프로필 Pixel Tablet, 2560×1600 가로 |
+| 차량 신호 | Pleos Vehicle SDK 실제 값 (`Pleos 차량 신호`) | 모의 (`모의 신호`) |
+| 위치 · 상대 차 | 모의 | 모의 |
+
+공통
+
 | 항목 | 값 |
 |---|---|
-| 에뮬레이터 | Android Emulator, AOSP 기본 시스템 이미지 Android 14 (API 34) arm64-v8a |
-| 화면 규격 | 기기 프로필 Pixel Tablet, 2560×1600 가로 |
 | 호스트 | macOS (Apple Silicon) |
 | 앱 설정 | minSdk 28, compileSdk/targetSdk 35, 가로 고정, `android.hardware.type.automotive`(required=false) |
 | 빌드 도구 | Gradle 8.11.1(wrapper), AGP 8.8.2, Kotlin 2.0.21, Compose BOM 2024.12.01 |
-| 권한 | 직접 선언한 권한 없음 (M1은 차량 SDK를 쓰지 않는다). AndroidX가 자동으로 넣는 앱 내부용 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`만 있다 |
+| 차량 SDK | `ai.pleos.playground:Vehicle:2.3.2` (저장소 `https://nexus-playground.pleos.ai/repository/maven-releases/`) |
+| 권한 (모두 조회용) | `pleos.car.permission.CAR_DOORS`, `CAR_SEATS`, `CAR_DRIVE`, `CAR_SAFETY`, `PRIVATE_CAR_SAFETY`. SDK가 스스로 넣는 `ai.pleos.playground.service.vehicle.VEHICLE_BINDING`, AndroidX가 넣는 앱 내부용 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. 에뮬레이터에서는 모두 설치할 때 허용된다(보호 수준 normal) |
 
-이 환경에서 확인한 것
-- release APK 설치·실행
-- 고정 시나리오 4개(정상 출차 / 짐만 싣기 / 예고 후 무이동 취소 / 지나침 복귀)와 `다음 바통`
-- 앱 오류 0건
+Pleos Connect 에뮬레이터에서 확인한 것 (Virtual Console에서 값을 바꾸고 앱 화면·로그로 확인)
+
+| 신호 | SDK API | 결과 |
+|---|---|---|
+| 운전석 문 | `Door.getCurrentDoorPosition` / `registerDoorPosition` (1열 왼쪽) | 콘솔의 Open/Close가 화면 "운전석 문" 줄에 반영 |
+| 운전석 착좌 | `Seat.getCurrentSeatOccupancy` / `registerSeatOccupancy` (1열 왼쪽) | 반영. 단 이 조합에서는 SDK 값이 콘솔과 반대로 와서(콘솔 Occupied → SDK false) 앱이 뒤집어 읽는다 |
+| 브레이크 페달 | `Brake.getCurrentBrakePedalStatus` / `registerBrakePedalStatus` | 콘솔 Brake Pedal 값이 0보다 크면 "페달 밟음" |
+| 주차 브레이크 경고등 | `Safety.getTelltalesInfo` / `registerTelltales`의 `PARKING_BRAKE` | 콘솔 Telltales의 Parking Brake On/Off 반영. `PRIVATE_CAR_SAFETY` 권한이 있어야 한다(`CAR_SAFETY`만으로는 SDK가 거부) |
+| 안전벨트 | `Seat.getCurrentSeatBeltBuckledState` / `registerSeatBeltBuckledState` | 조회·구독 호출은 되지만 Virtual Console에 벨트 조작이 없어 값 변화는 확인하지 못했다. 에뮬레이터에서는 미지원으로 두고 착좌만으로 판정한다 |
+
+- 위 신호만으로 PARKED → BOARDING → ANNOUNCING → DEPARTING까지 바뀌는 것, 모의 위치 스위치로 VACATED까지 가는 것 (캡처 `docs/shots/pleos_*.png`)
+- release APK 설치·실행, 앱 오류 0건
+
+일반 Android 에뮬레이터에서 확인한 것
+- 같은 release APK 설치·실행: 차량 서비스가 없어 모의 신호로 내려가고 맨 위 줄에 `모의 신호`가 표시된다
+- 고정 시나리오 4개(정상 출차 / 짐만 싣기 / 예고 후 무이동 취소 / 지나침 복귀)와 `다음 바통` (차량 SDK 연결 전 빌드에서 확인)
 
 아직 확인하지 않은 것과 모의인 것
-- Pleos Connect 에뮬레이터 v2.1.0 (API 34)에서는 아직 확인하지 않았다. 위 결과는 일반 Android Emulator에서 본 것이다.
-- 차량 신호·위치·상대 차는 실제 차량·서버 값이 아니라 모두 앱 안의 모의 구현이다(`FakeSignalSource`, 모의 위치, `MockPeerService`). 차량 SDK는 연결하지 않았다.
+- 실제 차량에서는 확인하지 않았다. 착좌 값의 방향, `PRIVATE_CAR_SAFETY` 권한이 실차·심사에서 허용되는지, 안전벨트 값은 실차에서 다시 확인해야 한다.
+- 위치와 상대 차는 실제 차량·서버 값이 아니라 앱 안의 모의 구현이다(모의 위치, `MockPeerService`). 위치 SDK(FusedLocation)는 연결하지 않았다.
+- 차량 서비스 연결이 실행 중에 끊겼다가 다시 붙는 경우는 시험하지 않았다.
 
 화면은 1920×1080 시안을 기준으로 실제 화면 크기에 비율대로 맞춘다.
 

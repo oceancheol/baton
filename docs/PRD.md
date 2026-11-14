@@ -99,7 +99,7 @@ GitHub 요건: `apk/팀명_앱이름_release.apk`, README에 앱 이름과 한 �
 - SDK 저장소: `https://nexus-playground.pleos.ai/repository/maven-releases/`
   - `ai.pleos.playground:Vehicle:2.3.2`, `FusedLocation:1.1.3`, `NaviHelper:3.0.5`, `TextToSpeech:3.3.1`
 - 에뮬레이터: Pleos Connect v2.1.0, API 34, Automotive AVD, Cold boot, RAM 4GB. Virtual Console은 `adb forward tcp:8088 tcp:8088` 후 `http://127.0.0.1:8088/`.
-- 퍼미션(조회용만): `pleos.car.permission.CAR_DOORS`, `CAR_SEATS`, `CAR_SAFETY`, `CAR_DRIVE`, `FUSED_LOCATION`, `NAVI_ROUTE`, `NAVI_ROUTE_SEARCH`, `TTS_SERVICE`.
+- 퍼미션(조회용만): `pleos.car.permission.CAR_DOORS`, `CAR_SEATS`, `CAR_SAFETY`, `CAR_DRIVE`, `FUSED_LOCATION`, `NAVI_ROUTE`, `NAVI_ROUTE_SEARCH`, `TTS_SERVICE`. 주차 브레이크 경고등 조회에는 `PRIVATE_CAR_SAFETY`도 필요하다(SDK 2.3.2에서 확인).
 
 ### 구조
 
@@ -116,14 +116,19 @@ app/
 
 ### 확인이 필요한 것과 대체 규칙
 
-| 항목 | 상태 | 안 될 때 |
+| 항목 | 상태 (2026-11-14, Pleos Connect v2.1.0 에뮬레이터 + Vehicle SDK 2.3.2) | 안 될 때 |
 |---|---|---|
-| 주차 브레이크(Safety Telltale) | 문서 기준 추정 | 브레이크 페달 + 이동 시작으로 3단계 판정 |
-| 문 잠금 영역 조회 | 좌석별 조회가 미지원인 사례 있음 | 문 열림·닫힘만 사용 |
-| 안전벨트 체결 시험 | Virtual Console 카드 미확인 | 착좌만 사용 |
-| 에뮬레이터 위치 주입 | 방법 미확인 | 앱 안의 모의 위치 |
-| API 파라미터·반환 타입 | 문서 레퍼런스 본문이 비어 있음 | 샘플 앱 소스와 SDK aar의 시그니처로 확인 |
-| 맥(Apple Silicon)에서 Pleos 에뮬레이터 구동 | arm64 이미지는 제공됨, 성능 미확인 | 일반 Automotive AVD + 모의 신호로 시연 |
+| 운전석 문 열림·닫힘 | 확인. `Door.getCurrentDoorPosition` / `registerDoorPosition`(`DoorArea(ROW_1_LEFT)`, 값은 정수: 0 닫힘) | 문 없이 착좌부터 판정 |
+| 운전석 착좌 | 확인. `Seat.getCurrentSeatOccupancy` / `registerSeatOccupancy`(`SeatArea(ROW_1_LEFT)`). SDK 값이 Virtual Console과 반대로 온다(Occupied → false). 앱에서 뒤집어 읽는다. 실차에서 방향 재확인 필요 | 최소 신호라 대체 없음(자동 예고 끔) |
+| 브레이크 페달 | 확인. `Brake.getCurrentBrakePedalStatus` / `registerBrakePedalStatus` | 이동 시작으로 3단계 판정 |
+| 주차 브레이크(Safety Telltale) | 확인. `Safety.getTelltalesInfo` / `registerTelltales`의 `TelltaleType.PARKING_BRAKE`(전자식은 `ELECTRONIC_PARKING_BRAKE`). 켜진 경고등만 목록에 온다. `PRIVATE_CAR_SAFETY` 권한이 필요하다(`CAR_SAFETY`만으로는 거부). 실차·심사에서 이 권한이 허용되는지는 미확인 | 브레이크 페달 + 이동 시작으로 3단계 판정 |
+| 문 잠금 영역 조회 | 쓰지 않음(미확인) | 문 열림·닫힘만 사용 |
+| 안전벨트 체결 시험 | 조회·구독 호출은 됨. Virtual Console에 벨트 조작이 없어 값 변화는 미확인 | 착좌만 사용(에뮬레이터에서는 벨트를 미지원으로 둔다) |
+| 에뮬레이터 위치 주입 | 미확인. FusedLocation은 연결하지 않음 | 앱 안의 모의 위치 |
+| API 파라미터·반환 타입 | SDK aar의 시그니처로 확인(위 네 신호와 안전벨트) | — |
+| Virtual Console 값 변경 방법 | 확인. 콘솔 화면 또는 HTTP `PUT /vehicle/body`, `/vehicle/seat`, `/vehicle/controls`, `/vehicle/telltales/simulator` | — |
+| 맥(Apple Silicon)에서 Pleos 에뮬레이터 구동 | 확인(arm64 이미지, 창 없이 구동해 앱 실행·신호 수신) | 일반 Automotive AVD + 모의 신호로 시연 |
+| 실제 차량 | 미확인 | — |
 
 ## 7. 성공 기준
 

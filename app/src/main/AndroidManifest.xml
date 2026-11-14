@@ -12,6 +12,14 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- Pleos Connect 차량 신호(조회 전용): 문 / 좌석(착좌·벨트) / 경고등 / 브레이크 페달 -->
+    <uses-permission android:name="pleos.car.permission.CAR_DOORS" />
+    <uses-permission android:name="pleos.car.permission.CAR_SEATS" />
+    <uses-permission android:name="pleos.car.permission.CAR_SAFETY" />
+    <!-- 경고등(주차 브레이크) 조회는 SDK 2.3.2 구현이 이 권한을 요구한다. 조회 전용이며, 없으면 대체 규칙으로 판정한다. -->
+    <uses-permission android:name="pleos.car.permission.PRIVATE_CAR_SAFETY" />
+    <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
