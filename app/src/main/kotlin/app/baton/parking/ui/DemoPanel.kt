@@ -54,6 +54,10 @@ fun DemoPanel(state: BatonUiState, vm: BatonViewModel, modifier: Modifier = Modi
         }
 
         Section("고정 시나리오" + (state.runningScenario?.let { " · 진행 중: $it" } ?: ""))
+        if (state.realVehicleSignals) {
+            // 고정 시나리오는 모의 스위치를 정해진 순서로 조작한다. 실제 차량 신호에서는 조작할 스위치가 없다.
+            Small("실제 차량 신호를 읽는 중이라 고정 시나리오 4개는 꺼 둠 (모의 신호 전용)")
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ScenarioButton(DemoScenario.NORMAL_DEPARTURE, state, vm, Modifier.weight(1f))
             ScenarioButton(DemoScenario.LUGGAGE_ONLY, state, vm, Modifier.weight(1f))
@@ -77,6 +81,7 @@ fun DemoPanel(state: BatonUiState, vm: BatonViewModel, modifier: Modifier = Modi
             )
             Label("주차 세대 ${d.parkingGeneration} · 예고 세대 ${d.announcementGeneration ?: "-"} · 거부한 옛 신호 ${d.rejectedEventCount}건")
             d.autoAnnounce.reason?.let { Label(it, BatonColors.Ink) }
+            state.sourceNotices.forEach { Label(it, BatonColors.Ink) }
         } else {
             Label("들어오는 차 · ${state.enteringPhase.label}", BatonColors.Go, bold = true)
             Label("도착 예상 ${state.etaSeconds}초 · 내 차 앞 대기 ${state.carsAheadOfMe}대")
@@ -88,7 +93,7 @@ fun DemoPanel(state: BatonUiState, vm: BatonViewModel, modifier: Modifier = Modi
             if (s == null) {
                 Label("실제 신호 소스 사용 중: 스위치 없음")
             } else if (state.realVehicleSignals) {
-                Label("문·착좌·벨트·브레이크는 ${state.signalSourceName}에서 읽는 중 (스위치 없음)")
+                Small(state.readingSummary ?: "차량 신호는 실제 값을 읽는 중 (스위치 없음)")
                 SwitchRow("이동 (20m 벗어남)", s.moved) { vm.setMoved(it) }
                 SwitchRow("위치 정확도 낮음", s.lowQualityLocation) { vm.setLowQualityLocation(it) }
                 SwitchRow("위치 신호 끊김", s.locationLost) { vm.setLocationLost(it) }
@@ -146,7 +151,12 @@ private fun ScenarioButton(
     vm: BatonViewModel,
     modifier: Modifier = Modifier,
 ) {
-    PanelButton(scenario.label, modifier, selected = state.runningScenario == scenario.label) {
+    PanelButton(
+        scenario.label,
+        modifier,
+        selected = state.runningScenario == scenario.label,
+        enabled = !state.realVehicleSignals,
+    ) {
         vm.runScenario(scenario)
     }
 }
@@ -202,6 +212,7 @@ fun PanelButton(
     text: String,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(10.dp)
@@ -210,13 +221,17 @@ fun PanelButton(
             .fillMaxWidth()
             .clip(shape)
             .border(1.dp, if (selected) BatonColors.Go else BatonColors.Line, shape)
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = text,
-            color = if (selected) BatonColors.Go else BatonColors.Ink,
+            color = when {
+                !enabled -> BatonColors.Mute
+                selected -> BatonColors.Go
+                else -> BatonColors.Ink
+            },
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,

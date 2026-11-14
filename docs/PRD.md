@@ -75,7 +75,7 @@ GitHub 요건: `apk/팀명_앱이름_release.apk`, README에 앱 이름과 한 �
 
 ### F3 화면과 음성 안내, 주차 위치 저장
 - 큰 숫자 하나(남은 시간), 단순 경로, 음성.
-- 주행 중에는 터치 입력을 받지 않는다. 구역은 자동 추천, 변경은 정차 중에만.
+- 주행 중에는 터치 입력을 받지 않는다. 구역은 자동 추천, 변경은 정차 중에만. (M1 현재: "이번엔 예고 안 함"만 움직이는 중에 꺼진다. 시연 패널을 포함한 나머지 터치 차단은 아직 구현하지 않았다.)
 - 주차가 끝나면 구역·줄, 걸린 시간을 저장한다.
 
 ### F4 인근 주차장으로 분산 (M2)
@@ -97,9 +97,12 @@ GitHub 요건: `apk/팀명_앱이름_release.apk`, README에 앱 이름과 한 �
 
 - Kotlin, Jetpack Compose, minSdk 28, compileSdk/targetSdk 35, JDK 17 이상.
 - SDK 저장소: `https://nexus-playground.pleos.ai/repository/maven-releases/`
-  - `ai.pleos.playground:Vehicle:2.3.2`, `FusedLocation:1.1.3`, `NaviHelper:3.0.5`, `TextToSpeech:3.3.1`
+  - 현재 연결한 SDK(M1): `ai.pleos.playground:Vehicle:2.3.2` 하나.
+  - M2 예정(아직 의존성에 없음): `FusedLocation:1.1.3`, `NaviHelper:3.0.5`, `TextToSpeech:3.3.1`.
 - 에뮬레이터: Pleos Connect v2.1.0, API 34, Automotive AVD, Cold boot, RAM 4GB. Virtual Console은 `adb forward tcp:8088 tcp:8088` 후 `http://127.0.0.1:8088/`.
-- 퍼미션(조회용만): `pleos.car.permission.CAR_DOORS`, `CAR_SEATS`, `CAR_SAFETY`, `CAR_DRIVE`, `FUSED_LOCATION`, `NAVI_ROUTE`, `NAVI_ROUTE_SEARCH`, `TTS_SERVICE`. 주차 브레이크 경고등 조회에는 `PRIVATE_CAR_SAFETY`도 필요하다(SDK 2.3.2에서 확인).
+- 퍼미션(조회용만)
+  - 현재 선언한 것(M1): `pleos.car.permission.CAR_DOORS`, `CAR_SEATS`, `CAR_SAFETY`, `CAR_DRIVE`, `PRIVATE_CAR_SAFETY`. 주차 브레이크 경고등 조회에 `PRIVATE_CAR_SAFETY`가 필요하다(SDK 2.3.2에서 확인). SDK가 스스로 `ai.pleos.playground.service.vehicle.VEHICLE_BINDING`을 더한다. 에뮬레이터에서 이 Pleos 권한들의 보호 수준은 normal이다. AndroidX가 넣는 앱 내부용 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`은 signature다.
+  - M2 예정(아직 선언하지 않음): `FUSED_LOCATION`, `NAVI_ROUTE`, `NAVI_ROUTE_SEARCH`, `TTS_SERVICE`.
 
 ### 구조
 
@@ -113,17 +116,20 @@ app/
 
 - 상태기계와 안내 순서 계산은 Android·SDK에 의존하지 않는 순수 Kotlin으로 두고 단위 시험을 붙인다.
 - SDK 호출은 `PleosSignalSource` 한 곳에만 둔다. SDK 초기화가 실패하면 `FakeSignalSource`로 내려가고 화면에 "모의 신호"라고 표시한다.
+- 실제 차량 신호: 관측 시각·순번·주차 세대를 콜백에 들어온 순간에 찍는다. 현재 값 조회는 한 번에 하나만 돌고, 구독을 먼저 등록해 조회 중의 변경을 모아 두었다가 기준값 뒤에 내보낸다. 10초마다 현재 값을 다시 물어 하나도 읽지 못하면 차량 신호를 일시 불가로 바꿔 예고를 취소하고, 다시 읽히면 현재 값으로 복원한다.
+- 새 주차의 기준값 복원은 처음 연결할 때의 복원과 구분한다: 새 주차에서는 계속 앉아 있다는 이유로 예고하지 않고 문 여닫힘(또는 하차 후 재착좌)을 기다린다.
+- 에뮬레이터에서만 확인한 해석(착좌 값 뒤집기, 벨트 제외, "경고등 목록에 항목 없음 = 꺼짐")은 Pleos Connect 에뮬레이터(`Build.FINGERPRINT`가 `Pleos/crp_avd`로 시작)에서만 쓴다. 그 밖의 환경에서는 착좌를 쓰지 않아 자동 예고가 꺼지고, 주차 브레이크 경고등은 빼고 페달·이동으로 판정하며, 벨트는 SDK 지원 확인 결과를 따른다. 실차에서는 확인하지 않았다.
 
 ### 확인이 필요한 것과 대체 규칙
 
 | 항목 | 상태 (2026-11-14, Pleos Connect v2.1.0 에뮬레이터 + Vehicle SDK 2.3.2) | 안 될 때 |
 |---|---|---|
 | 운전석 문 열림·닫힘 | 확인. `Door.getCurrentDoorPosition` / `registerDoorPosition`(`DoorArea(ROW_1_LEFT)`, 값은 정수: 0 닫힘) | 문 없이 착좌부터 판정 |
-| 운전석 착좌 | 확인. `Seat.getCurrentSeatOccupancy` / `registerSeatOccupancy`(`SeatArea(ROW_1_LEFT)`). SDK 값이 Virtual Console과 반대로 온다(Occupied → false). 앱에서 뒤집어 읽는다. 실차에서 방향 재확인 필요 | 최소 신호라 대체 없음(자동 예고 끔) |
+| 운전석 착좌 | 확인. `Seat.getCurrentSeatOccupancy` / `registerSeatOccupancy`(`SeatArea(ROW_1_LEFT)`). SDK 값이 Virtual Console과 반대로 온다(Occupied → false). 이 에뮬레이터에서만 뒤집어 읽는다. 실차에서 방향 재확인 필요(그 전까지 실차에서는 착좌를 쓰지 않는다) | 최소 신호라 대체 없음(자동 예고 끔) |
 | 브레이크 페달 | 확인. `Brake.getCurrentBrakePedalStatus` / `registerBrakePedalStatus` | 이동 시작으로 3단계 판정 |
-| 주차 브레이크(Safety Telltale) | 확인. `Safety.getTelltalesInfo` / `registerTelltales`의 `TelltaleType.PARKING_BRAKE`(전자식은 `ELECTRONIC_PARKING_BRAKE`). 켜진 경고등만 목록에 온다. `PRIVATE_CAR_SAFETY` 권한이 필요하다(`CAR_SAFETY`만으로는 거부). 실차·심사에서 이 권한이 허용되는지는 미확인 | 브레이크 페달 + 이동 시작으로 3단계 판정 |
+| 주차 브레이크(Safety Telltale) | 확인. `Safety.getTelltalesInfo` / `registerTelltales`의 `TelltaleType.PARKING_BRAKE`(전자식은 `ELECTRONIC_PARKING_BRAKE`). 켜진 경고등만 목록에 온다(이 에뮬레이터에서 확인. 그래서 "항목 없음 = 꺼짐"은 이 에뮬레이터에서만 쓴다). `PRIVATE_CAR_SAFETY` 권한이 필요하다(`CAR_SAFETY`만으로는 거부). 실차·심사에서 이 권한이 허용되는지는 미확인 | 브레이크 페달 + 이동 시작으로 3단계 판정 |
 | 문 잠금 영역 조회 | 쓰지 않음(미확인) | 문 열림·닫힘만 사용 |
-| 안전벨트 체결 시험 | 조회·구독 호출은 됨. Virtual Console에 벨트 조작이 없어 값 변화는 미확인 | 착좌만 사용(에뮬레이터에서는 벨트를 미지원으로 둔다) |
+| 안전벨트 체결 시험 | 조회·구독 호출은 됨. Virtual Console에 벨트 조작이 없어 값 변화는 미확인 | 착좌만 사용(이 에뮬레이터에서는 시연 설정으로 벨트를 판정에서 뺀다. 그 밖의 환경은 SDK 지원 확인 결과를 따른다) |
 | 에뮬레이터 위치 주입 | 미확인. FusedLocation은 연결하지 않음 | 앱 안의 모의 위치 |
 | API 파라미터·반환 타입 | SDK aar의 시그니처로 확인(위 네 신호와 안전벨트) | — |
 | Virtual Console 값 변경 방법 | 확인. 콘솔 화면 또는 HTTP `PUT /vehicle/body`, `/vehicle/seat`, `/vehicle/controls`, `/vehicle/telltales/simulator` | — |

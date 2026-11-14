@@ -43,6 +43,8 @@ fun LeavingScreen(state: BatonUiState, onSuppress: () -> Unit) {
                     Headline(first, second, if (active) BatonColors.Go else BatonColors.Sub)
                     // 최소 신호(착좌·위치)를 읽지 못하면 자동 예고가 꺼진 이유를 한 줄로 알린다.
                     snap.autoAnnounce.reason?.let { Foot(it, Modifier.padding(top = 10.u)) }
+                    // 신호 소스 쪽 사정(연결 중 / 연결 불가 / 검증되지 않은 환경)도 한 줄씩 알린다.
+                    state.sourceNotices.forEach { Foot(it, Modifier.padding(top = 6.u)) }
                 }
                 Column {
                     Cap("이 자리로 안내받는 차")

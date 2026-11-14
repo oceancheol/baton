@@ -74,6 +74,9 @@ class DepartureStateMachine(
     private var parkingBrakeReleasedSeen = false
     private var pedalSeen = false
 
+    // 새 주차를 시작했지만 그 주차의 기준값(현재 신호 값)을 아직 받지 못했다. 받을 때까지 PARKED 에 머문다.
+    private var awaitingParkingBaseline = false
+
     // 문 신호를 읽지 못할 때: 착좌가 풀려 있던 적이 있어야(=내렸다 다시 탔어야) 탑승으로 본다.
     private var doorlessArmed = true
 
@@ -118,6 +121,10 @@ class DepartureStateMachine(
      * - [SignalSnapshot.parkingGeneration]이 현재 주차 세대와 다르거나, [SignalSnapshot.requestId]가 이미 반영한
      *   요청보다 앞서면 통째로 거부한다([TransitionReason.STALE_SNAPSHOT_REJECTED] 기록만 남는다).
      * - 신호마다 스냅샷의 관측 시각(takenAtMillis)이 이미 반영한 관측보다 오래됐으면 그 신호는 지금 값을 그대로 둔다.
+     *
+     * 새 주차의 기준값을 기다리는 중이면(`startNewParking(awaitBaseline = true)`) 이 복원은 "최초 연결 복원"이 아니라
+     * "새 주차의 기준값"이다. 이때는 앉아 있어도 탑승으로 복원하지 않는다: 방금 주차한 운전자가 아직 앉아 있을 뿐이므로
+     * 문 여닫힘(문 신호가 없으면 하차 후 재착좌)을 기다린다.
      */
     @Synchronized
     fun restore(snapshot: SignalSnapshot): List<DepartureLogEvent> = input {
@@ -128,10 +135,17 @@ class DepartureStateMachine(
             return@input
         }
         noteQualityChange(previousQuality)
+        val newParkingBaseline = awaitingParkingBaseline
+        awaitingParkingBaseline = false
         when (state) {
             DepartureState.PARKED -> {
                 doorOpenedWhileParked = value(SignalKind.DOOR) == true
-                if (value(SignalKind.SEAT) == true) restoredOccupied = true
+                if (newParkingBaseline) {
+                    // 새 주차의 기준값: 남아 있는 착좌는 탑승으로 세지 않는다.
+                    doorlessArmed = value(SignalKind.SEAT) != true
+                } else if (value(SignalKind.SEAT) == true) {
+                    restoredOccupied = true
+                }
             }
             DepartureState.ANNOUNCING, DepartureState.DEPARTING -> {
                 val now = clock.nowMillis()
@@ -188,9 +202,16 @@ class DepartureStateMachine(
      * [newSnapshotRequest]로 받은 표를 붙여 [restore]로 넣는다(이 함수를 두 번 부르지 않는다).
      * [snapshot]에 주차 세대가 적혀 있으면 새 세대와 같아야 하고, 이미 반영한 관측보다 오래된 값은 쓰지 않는다.
      * 이 시각 이전의 관측은 이후에 신호로 오든 스냅샷으로 오든 받지 않는다.
+     *
+     * [awaitBaseline]이 true 이면(스냅샷 없이 부를 때만 뜻이 있다) 다음에 반영되는 [restore]를 이 주차의 기준값으로 삼고,
+     * 그때까지 PARKED 에 머문다. 그 복원에서는 "이미 앉아 있음"을 탑승으로 보지 않는다(스냅샷을 함께 준 경우와 같은 규칙).
+     * 기다리는 동안 본 문 여닫힘은 기준값을 받은 뒤 그대로 탑승 판정에 쓴다.
      */
     @Synchronized
-    fun startNewParking(snapshot: SignalSnapshot? = null): List<DepartureLogEvent> = input {
+    fun startNewParking(
+        snapshot: SignalSnapshot? = null,
+        awaitBaseline: Boolean = false,
+    ): List<DepartureLogEvent> = input {
         val from = state
         val endedAnnouncement = activeAnnouncement
         val now = clock.nowMillis()
@@ -205,6 +226,7 @@ class DepartureStateMachine(
         for (kind in SignalKind.entries) lastObservedAt[kind] = maxOf(lastObservedAt[kind] ?: now, now)
         resetParkingObservations()
         doorlessArmed = value(SignalKind.SEAT) != true
+        awaitingParkingBaseline = awaitBaseline && applied == null
         state = DepartureState.PARKED
         stateEnteredAt = now
         emit(from, DepartureState.PARKED, TransitionReason.NEW_PARKING, announcement = endedAnnouncement)
@@ -459,6 +481,7 @@ class DepartureStateMachine(
                     if (movedAtLeast(config.vacateMeters)) {
                         DepartureState.VACATED to TransitionReason.SUPPRESSED_LEFT
                     } else null
+                awaitingParkingBaseline -> null // 새 주차의 기준값을 받을 때까지 판정하지 않는다
                 excluded(SignalKind.DOOR) ->
                     if (doorlessArmed) DepartureState.BOARDING to TransitionReason.DOOR_UNSUPPORTED else null
                 doorCycled -> DepartureState.BOARDING to TransitionReason.DOOR_OPEN_CLOSE

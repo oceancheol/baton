@@ -76,14 +76,19 @@ private fun SourceStrip(state: BatonUiState, onTogglePanel: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ("모의 신호" !in state.mockChips) {
+                // 실제 차량 신호: 값을 읽는 중일 때만 채운 표시. 연결 중·연결 불가는 테두리만 그려 구분한다.
+                val live = state.signalSourceLive
                 Box(
                     modifier = Modifier
-                        .background(BatonColors.Go, CircleShape)
+                        .then(
+                            if (live) Modifier.background(BatonColors.Go, CircleShape)
+                            else Modifier.border(1.dp, BatonColors.Sub, CircleShape),
+                        )
                         .padding(horizontal = 10.dp, vertical = 2.dp),
                 ) {
                     Text(
                         state.signalSourceName,
-                        color = BatonColors.Bg,
+                        color = if (live) BatonColors.Bg else BatonColors.Sub,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,

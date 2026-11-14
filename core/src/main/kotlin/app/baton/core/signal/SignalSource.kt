@@ -84,13 +84,14 @@ data class SignalSnapshot(
 }
 
 /**
- * 차량 신호를 내보내는 곳. 구현체는 모의(FakeSignalSource)와 실차 SDK(PleosSignalSource, 예정) 두 가지다.
+ * 차량 신호를 내보내는 곳. 구현체는 모의(FakeSignalSource)와 차량 SDK(PleosSignalSource) 두 가지다.
  *
  * 계약: **현재 값 조회 → 이후 변경 수신** 순서로 쓴다.
  * 1. [currentSnapshot]으로 현재 값을 읽어 상태기계에 `restore()`(또는 `startNewParking(snapshot)`)로 넣는다.
  *    이 값은 초기 상태일 뿐 '변화'가 아니다(문 닫힘을 "방금 닫혔다"로, 경고등 꺼짐을 "방금 해제했다"로 세지 않는다).
  *    조회가 비동기이면 조회 전에 상태기계에서 [SnapshotRequest]를 받아 답에 붙인다([SignalSnapshot.answering]).
- *    새 주차 때는 `startNewParking()`으로 세대를 한 번만 올리고, 그 세대의 요청으로 읽은 값을 `restore()`로 넣는다.
+ *    새 주차 때는 `startNewParking(awaitBaseline = true)`로 세대를 한 번만 올리고, 그 세대의 요청으로 읽은 값을
+ *    `restore()`로 넣는다(그 복원은 새 주차의 기준값이라 "이미 앉아 있음"을 탑승으로 세지 않는다).
  * 2. 그 뒤 [events]를 구독해 변경만 받는다.
  *
  * 구현체는 스냅샷에서 신호마다 사용 가능/미지원/일시 불가를 가려 줘야 한다. 조회가 실패하거나 시간 안에 오지 않은

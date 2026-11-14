@@ -19,10 +19,10 @@ import app.baton.core.match.ZoneSummary
 import app.baton.core.signal.LocationQuality
 import app.baton.core.signal.SignalAvailability
 import app.baton.core.signal.SignalReading
-import app.baton.core.signal.SignalSource
+import app.baton.parking.signal.BatonSignalSource
 import app.baton.parking.signal.FakeSignalSource
 import app.baton.parking.signal.FakeSignalState
-import app.baton.parking.signal.PleosSignalSource
+import app.baton.parking.signal.LinkStatus
 import app.baton.parking.signal.SignalSourceProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,6 +76,12 @@ data class BatonUiState(
     /** 맨 위 줄에 따로따로 보이는 모의 요소(신호 / 위치 / 상대 차 / 시간 전진). */
     val mockChips: List<String> = emptyList(),
     val signalSourceName: String = "",
+    /** 실제 차량 신호를 지금 읽고 있는지(연결 중·연결 불가면 false). 맨 위 줄 표시 색에 쓴다. */
+    val signalSourceLive: Boolean = false,
+    /** 신호 소스 쪽 사정으로 자동 예고가 멈춘 이유들(연결 중 / 연결 불가 / 검증되지 않은 환경). */
+    val sourceNotices: List<String> = emptyList(),
+    /** 실제 차량 신호일 때 시연 패널에 적는 "무엇을 읽는 중인지" 한 줄. */
+    val readingSummary: String? = null,
     val panelOpen: Boolean = true,
     // 나가는 차
     val departure: DepartureSnapshot = DepartureSnapshot(),
@@ -128,12 +134,20 @@ class BatonViewModel internal constructor(
     private val startedAt = clock.nowMillis()
     private val matchConfig = MatchConfig()
 
-    // 신호 소스 주입 지점은 SignalSourceProvider 한 곳이다.
-    private val signalSource: SignalSource = SignalSourceProvider.create(application, clock)
-    private val fakeSource: FakeSignalSource? = signalSource as? FakeSignalSource
+    // 신호 소스 주입 지점은 SignalSourceProvider 한 곳이다. 구현 클래스는 보지 않고 인터페이스만 쓴다.
+    // 소스에는 바탕 시계를 준다: 소스는 SDK 콜백 스레드에서도 시각을 읽으므로, 모의 세계를 되밟는 동안 잠깐 고정되는
+    // 시각(SteppedClock)이 관측 시각에 섞이지 않게 한다. 화면 스레드에서는 두 시계의 값이 같다.
+    private val signalSource: BatonSignalSource = SignalSourceProvider.create(application, demoClock)
+
+    /** 스위치로 조작하는 모의 차량 신호. 실제 차량 신호 소스면 null. */
+    private val fakeSource: FakeSignalSource? = signalSource.manualSignals
 
     /** 모의 위치를 맡는 곳. 모의 소스면 그 자신, 실제 차량 신호 소스면 그 안의 위치 전용 모의 소스. */
-    private val mockLocation: FakeSignalSource? = fakeSource ?: (signalSource as? PleosSignalSource)?.mockLocation
+    private val mockLocation: FakeSignalSource? = signalSource.mockLocation
+
+    /** 진행 중인 현재 값 조회(실제 신호 소스). 새로 시작하면 앞의 것은 취소한다: 조회는 한 번에 하나다. */
+    private var restoreJob: Job? = null
+    private var parkingStarted = false
 
     private val machine = DepartureStateMachine(clock, signalSource.capabilities)
     private var coordinator = GuidanceCoordinator(clock, matchConfig)
@@ -168,7 +182,9 @@ class BatonViewModel internal constructor(
         resetWorld(Role.LEAVING)
         viewModelScope.launch {
             // 계약: 현재 값을 먼저 읽어 복원하고(초기값은 변화로 세지 않는다), 그 뒤의 변경만 받는다.
-            restoreFromSource()
+            // 실제 신호 소스의 첫 조회는 위 resetWorld 가 이미 시작했다(조회를 두 번 겹쳐 하지 않는다).
+            // 그 소스는 조회가 끝날 때까지 변경을 모아 두었다가 기준값 뒤에 내보낸다.
+            if (fakeSource != null) restoreFromSource()
             refresh()
             signalSource.events.collect { event ->
                 if (role == Role.LEAVING) applyDeparture(machine.onSignal(event))
@@ -177,6 +193,27 @@ class BatonViewModel internal constructor(
         }
         viewModelScope.launch {
             mockLocation?.state?.collect { refresh() }
+        }
+        viewModelScope.launch {
+            var previous = signalSource.link.value
+            signalSource.link.collect { status ->
+                if (status != previous) {
+                    when (status) {
+                        LinkStatus.UNAVAILABLE -> addLog("${signalSource.name}: 값을 읽지 못함 → 차량 신호 일시 불가, 자동 예고 정지")
+                        LinkStatus.RECEIVING ->
+                            if (previous == LinkStatus.UNAVAILABLE) {
+                                // 끊겼다 다시 붙었다: 그 사이의 변화는 알 수 없으므로 현재 값을 다시 읽어 복원한다.
+                                addLog("${signalSource.name}: 다시 읽힘 → 현재 값을 다시 읽어 복원")
+                                requestRestore()
+                            } else {
+                                addLog("${signalSource.name}: 수신 시작")
+                            }
+                        LinkStatus.CONNECTING -> Unit
+                    }
+                    previous = status
+                }
+                refresh()
+            }
         }
         viewModelScope.launch {
             while (true) {
@@ -307,7 +344,7 @@ class BatonViewModel internal constructor(
         cancelScenario()
         val fake = fakeSource
         if (fake == null) {
-            addLog("실제 신호 소스에서는 고정 시나리오를 쓸 수 없음")
+            addLog("실제 차량 신호에서는 고정 시나리오를 쓸 수 없음 (모의 신호 전용)")
             refresh()
             return
         }
@@ -479,14 +516,34 @@ class BatonViewModel internal constructor(
         } else {
             // 실제 신호 소스: 세대를 한 번 올려 옛 신호·옛 조회를 막고, 그 세대의 요청으로 현재 값을 읽어 복원한다.
             // 조회가 돌아오기 전에 주차가 또 바뀌면 세대가 달라져 그 답은 상태기계가 버린다.
-            applyDeparture(machine.startNewParking())
+            //
+            // 앱을 처음 연결할 때의 복원과 새 주차의 기준값 복원은 다르다.
+            // - 처음: 이미 앉아 있으면 탑승한 상태로 복원한다(앱이 늦게 떴을 뿐 운전자는 출발하려는 중일 수 있다).
+            // - 새 주차(다음 바통 / 처음부터): 방금 주차한 운전자가 아직 앉아 있을 뿐이므로 탑승으로 세지 않는다.
+            //   상태기계가 기준값을 받을 때까지 기다렸다가, 문 여닫힘이나 하차 후 재착좌를 본 뒤에 판정한다.
+            applyDeparture(machine.startNewParking(awaitBaseline = parkingStarted))
+            parkingStarted = true
+            val generation = machine.snapshot.value.parkingGeneration
+            // 이 뒤로 소스가 받는 관측에는 새 세대가 붙는다. 그 전에 받아 아직 처리하지 않은 관측은 옛 세대라 거부된다.
+            signalSource.parkingGeneration = generation
             // 모의 위치는 주차 지점으로 되돌린다(실제 차량 신호는 건드리지 않는다).
-            mockLocation?.resetToParked(machine.snapshot.value.parkingGeneration)
-            viewModelScope.launch {
-                restoreFromSource()
-                refresh()
-            }
+            mockLocation?.resetToParked(generation)
+            requestRestore()
         }
+    }
+
+    /** 현재 값을 읽어 복원한다(실제 신호 소스). 앞서 시작한 조회가 아직 돌고 있으면 취소하고 하나만 돌린다. */
+    private fun requestRestore() {
+        restoreJob?.cancel()
+        restoreJob = viewModelScope.launch {
+            restoreFromSource()
+            refresh()
+        }
+    }
+
+    override fun onCleared() {
+        signalSource.close()
+        super.onCleared()
     }
 
     /**
@@ -586,6 +643,7 @@ class BatonViewModel internal constructor(
         drainMachineLog()
         val now = clock.nowMillis()
         val snapshot = machine.snapshot.value
+        val link = signalSource.link.value
         val zones = coordinator.zoneSummaries(excludeCarId = ME)
         val offer = currentOffer
         val myDistance = peers.distanceOf(ME) ?: 0.0
@@ -597,7 +655,18 @@ class BatonViewModel internal constructor(
                 "모의 상대 차",
                 if (skippedSeconds > 0) "시간 전진 +${skippedSeconds}초" else "시간 전진 없음",
             ),
-            signalSourceName = signalSource.name,
+            signalSourceName = when (link) {
+                LinkStatus.CONNECTING -> "Pleos 연결 중"
+                LinkStatus.RECEIVING -> signalSource.name
+                LinkStatus.UNAVAILABLE -> "Pleos 연결 불가"
+            },
+            signalSourceLive = link == LinkStatus.RECEIVING,
+            sourceNotices = if (signalSource.isMock) emptyList() else listOfNotNull(
+                "Pleos 차량 서비스 연결 중 · 값을 읽기 전에는 예고하지 않음".takeIf { link == LinkStatus.CONNECTING },
+                "Pleos 차량 서비스에서 신호를 읽지 못함 · 자동 예고 정지".takeIf { link == LinkStatus.UNAVAILABLE },
+                signalSource.environmentNotice,
+            ),
+            readingSummary = signalSource.readingSummary,
             panelOpen = panelOpen,
             departure = snapshot,
             myZone = myZone,
@@ -653,7 +722,14 @@ class BatonViewModel internal constructor(
         val seat = if (seatProblem != null) {
             SignalLine("착좌 · 안전벨트", seatProblem, on = false, muted = true)
         } else {
-            val beltText = beltProblem?.let { "벨트 $it" } ?: if (belted) "벨트 맴" else "벨트 안 맴"
+            val beltText = when {
+                // 벨트를 읽을 수 없는 것이 아니라 시연 설정으로 뺀 것이면 사실대로 적는다.
+                s.seatBelt.availability == SignalAvailability.UNSUPPORTED && signalSource.beltExcludedForDemo ->
+                    "시연 설정으로 벨트 제외"
+                beltProblem != null -> "벨트 $beltProblem"
+                belted -> "벨트 맴"
+                else -> "벨트 안 맴"
+            }
             SignalLine(
                 "착좌 · 안전벨트",
                 "${if (seated) "앉음" else "비어 있음"} · $beltText",

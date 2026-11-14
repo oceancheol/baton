@@ -9,7 +9,6 @@ import app.baton.core.signal.SignalEvent
 import app.baton.core.signal.SignalKind
 import app.baton.core.signal.SignalReading
 import app.baton.core.signal.SignalSnapshot
-import app.baton.core.signal.SignalSource
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,7 +38,7 @@ data class FakeSignalState(
 class FakeSignalSource(
     private val clock: Clock,
     override val capabilities: SignalCapabilities = SignalCapabilities.ALL,
-) : SignalSource {
+) : BatonSignalSource {
     override val name: String = "모의 신호"
     override val isMock: Boolean = true
 
@@ -49,9 +48,17 @@ class FakeSignalSource(
     private val _state = MutableStateFlow(FakeSignalState())
     val state: StateFlow<FakeSignalState> = _state.asStateFlow()
 
+    override val manualSignals: FakeSignalSource get() = this
+    override val mockLocation: FakeSignalSource get() = this
+    override val link: StateFlow<LinkStatus> = MutableStateFlow(LinkStatus.RECEIVING)
+
     /** 지금 값을 읽는 기준인 주차 세대. 새 주차를 시작할 때 맞춘다. */
     @Volatile
-    var parkingGeneration: Long? = null
+    override var parkingGeneration: Long? = null
+
+    override fun close() {
+        channel.close()
+    }
 
     override suspend fun currentSnapshot(): SignalSnapshot = snapshotNow()
 

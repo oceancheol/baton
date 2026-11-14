@@ -35,6 +35,8 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG: 차량 상태 상세 로그를 debug 빌드에서만 남기는 데 쓴다.
+        buildConfig = true
     }
 
     testOptions {
