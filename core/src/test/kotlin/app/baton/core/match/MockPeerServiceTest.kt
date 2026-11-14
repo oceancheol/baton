@@ -134,4 +134,84 @@ class MockPeerServiceTest {
         peers.tick()
         assertEquals(98.0, peers.distanceOf("late")!!, 1e-9)
     }
+
+    // ---- ensureWaitingPeer: 안내받지 않은 대기 차 보장 -----------------------
+
+    /** C구역에 안내가 열린 자리를 [count]개 만든다(대기 차가 없으면 아무에게도 안내되지 않은 채 열려 있다). */
+    private fun openSpotsInC(count: Int) = repeat(count) { i ->
+        coordinator.announceSpot("spot-$i", "C", i + 1, "owner-$i")
+        coordinator.openGuidance("spot-$i")
+    }
+
+    private fun peersInC() = coordinator.waitingCars().filter { it.zoneId == "C" }.map { it.id }
+
+    @Test
+    fun `ensureWaitingPeer - 안내받지 않은 대기 차가 이미 있으면 추가하지 않는다`() {
+        peers.trackCar("peer-c1", "C", 60.0)
+        assertNull(coordinator.offerFor("peer-c1"))
+
+        assertNull(peers.ensureWaitingPeer("C"))
+        assertEquals(listOf("peer-c1"), peersInC())
+
+        // 열린 자리가 있어도, 안내받는 차 말고 안내받지 않은 차가 한 대 있으면 그대로 둔다.
+        openSpotsInC(1)
+        assertEquals("peer-c1", coordinator.offerForSpot("spot-0")?.carId)
+        peers.trackCar("peer-c2", "C", 80.0)
+        assertNull(coordinator.offerFor("peer-c2"))
+        assertNull(peers.ensureWaitingPeer("C"))
+        assertEquals(listOf("peer-c1", "peer-c2"), peersInC())
+    }
+
+    @Test
+    fun `ensureWaitingPeer - 제외한 차와 다른 구역 차는 대기 차로 치지 않는다`() {
+        peers.trackCar("me", "C", 98.0)
+        peers.trackCar("peer-a1", "A", 60.0)
+
+        assertEquals("peer-cn1", peers.ensureWaitingPeer("C", exceptCarId = "me"))
+        assertEquals(listOf("me", "peer-cn1"), peersInC())
+    }
+
+    @Test
+    fun `ensureWaitingPeer - 대기 차가 모두 안내받는 중이면 안내받지 않은 차가 생길 때까지 추가한다`() {
+        peers.trackCar("peer-c1", "C", 60.0)
+        openSpotsInC(2) // spot-0 은 peer-c1 에게, spot-1 은 안내할 차가 없어 열린 채
+        assertEquals("peer-c1", coordinator.offerForSpot("spot-0")?.carId)
+        assertNull(coordinator.offerForSpot("spot-1"))
+
+        // 처음 넣은 차는 spot-1 로 곧바로 안내받으므로 한 대 더 넣는다.
+        assertEquals("peer-cn1", peers.ensureWaitingPeer("C"))
+        assertEquals(listOf("peer-c1", "peer-cn1", "peer-cn2"), peersInC())
+        assertEquals("peer-c1", coordinator.offerForSpot("spot-0")?.carId, "이미 있던 안내는 그대로다")
+        assertEquals("peer-cn1", coordinator.offerForSpot("spot-1")?.carId)
+        assertNull(coordinator.offerFor("peer-cn2"), "다음 예고가 안내할 차가 남는다")
+
+        // 이어지는 예고는 그 차에게 안내한다.
+        coordinator.announceSpot("next", "C", 9, "next-owner")
+        coordinator.openGuidance("next")
+        assertEquals("peer-cn2", coordinator.offerForSpot("next")?.carId)
+
+        // 다시 부르면 또 모두 안내 중이므로 한 대만 더 넣는다.
+        assertEquals("peer-cn3", peers.ensureWaitingPeer("C"))
+        assertNull(coordinator.offerFor("peer-cn3"))
+    }
+
+    @Test
+    fun `ensureWaitingPeer - 추가 횟수는 그 구역의 안내가 열린 자리 수 더하기 1 을 넘지 않는다`() {
+        // 열린 자리 3개가 모두 비어 있을 때: 3대가 자리마다 안내받고 한 대가 남는다 = 꼭 4대.
+        openSpotsInC(3)
+        // 다른 구역의 열린 자리와, 아직 안내를 시작하지 않은 C구역 예고는 상한에 들지 않는다.
+        coordinator.announceSpot("a-spot", "A", 1, "a-owner")
+        coordinator.openGuidance("a-spot")
+        coordinator.announceSpot("not-open", "C", 8, "quiet-owner")
+
+        assertEquals("peer-cn1", peers.ensureWaitingPeer("C"))
+        assertEquals(listOf("peer-cn1", "peer-cn2", "peer-cn3", "peer-cn4"), peersInC())
+        assertEquals(3, coordinator.activeOffers().count { it.zoneId == "C" })
+        assertNull(coordinator.offerFor("peer-cn4"))
+        assertNull(coordinator.offerForSpot("a-spot"), "다른 구역 자리로는 가지 않는다")
+
+        // 열린 자리가 없으면 한 대만 넣는다.
+        assertEquals("peer-bn5", peers.ensureWaitingPeer("B"))
+        assertEquals(listOf("peer-bn5"), coordinator.waitingCars().filter { it.zoneId == "B" }.map { it.id })
+    }
 }

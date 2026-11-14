@@ -120,18 +120,35 @@ class MockPeerService(
     @Synchronized
     fun trackedCarIds(): List<String> = distances.keys.toList()
 
-    /** [zone]에 [exceptCarId] 말고 기다리는 모의 차가 없으면 한 대 넣는다. @return 넣었으면 그 차의 id */
+    /**
+     * [zone]에 [exceptCarId] 말고 **아직 안내받지 않은** 모의 대기 차가 한 대는 있게 한다(다음 예고가 안내할 차).
+     *
+     * 이미 안내받는 차는 대기 차로 치지 않는다. 새로 넣은 차가 그 구역의 열려 있는 자리(예: 비운 뒤 180초 동안
+     * 유효한 옛 자리)로 곧바로 안내받으면 다시 확인해 한 대 더 넣는다. 넣는 횟수는 그 구역의 안내가 열린 자리 수 + 1
+     * 까지다(열린 자리마다 한 대씩 가져가도 한 대가 남는 수). 배정 순서와 자리 유효 시간은 건드리지 않는다.
+     *
+     * @return 넣었으면 처음 넣은 차의 id, 넣지 않았으면 null
+     */
     @Synchronized
     fun ensureWaitingPeer(zone: String, exceptCarId: String? = null, distanceMeters: Double = 60.0): String? {
         tick() // 입력보다 먼저 지금까지의 세계를 진행한다
-        val exists = coordinator.waitingCars().any {
-            it.zoneId == zone && it.id != exceptCarId && distances.containsKey(it.id)
+        val maxAdds = coordinator.announcedSpots().count { it.zoneId == zone && it.guidanceOpen } + 1
+        var firstAdded: String? = null
+        repeat(maxAdds) {
+            if (hasUnguidedPeer(zone, exceptCarId)) return firstAdded
+            val id = "peer-${zone.lowercase()}n${++peerSeq}"
+            addPeer(id, zone, distanceMeters, 0) // 등록과 동시에 열린 자리로 배정될 수 있다
+            if (firstAdded == null) firstAdded = id
         }
-        if (exists) return null
-        val id = "peer-${zone.lowercase()}n${++peerSeq}"
-        addPeer(id, zone, distanceMeters, 0)
-        return id
+        return firstAdded
     }
+
+    /** [zone]에 [exceptCarId] 말고, 흉내 중이면서 지금 유효한 안내가 없는 대기 차가 있는지. */
+    private fun hasUnguidedPeer(zone: String, exceptCarId: String?): Boolean =
+        coordinator.waitingCars().any {
+            it.zoneId == zone && it.id != exceptCarId && distances.containsKey(it.id) &&
+                coordinator.offerFor(it.id) == null
+        }
 
     /** 아직 안내·집계에 남아 있는 상대 차 예고가 있는지. */
     @Synchronized

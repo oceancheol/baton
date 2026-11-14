@@ -91,10 +91,12 @@ fun DesignCanvas(modifier: Modifier = Modifier, content: @Composable ColumnScope
 
 /**
  * 한글이 낱말 중간에서 줄바꿈되지 않게 한다(띄어쓰기 단위로만 줄을 나눈다).
- * API 34 에서는 줄바꿈 설정으로 되지 않아, 낱말 안 글자 사이에 폭 없는 이음 문자(U+2060)를 넣는다.
+ * API 34 에서는 줄바꿈 설정으로 되지 않아, 맞붙은 한글 음절 사이에만 폭 없는 이음 문자(U+2060)를 넣는다.
+ * 한글 음절이 아닌 글자(이모지·영문·숫자·기호)는 건드리지 않는다.
  */
-fun keepWords(text: String): String =
-    text.split(' ').joinToString(" ") { word -> word.toList().joinToString("\u2060") }
+private val BETWEEN_HANGUL = Regex("(?<=[\\uAC00-\\uD7A3])(?=[\\uAC00-\\uD7A3])")
+
+fun keepWords(text: String): String = text.replace(BETWEEN_HANGUL, "\u2060")
 
 @Composable
 fun T(

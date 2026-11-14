@@ -4,10 +4,11 @@ import app.baton.core.departure.DepartureState.DEPARTING
 import app.baton.core.departure.DepartureState.PARKED
 import app.baton.core.departure.DepartureState.VACATED
 import kotlin.test.AfterTest
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -180,19 +181,40 @@ class EnteringCarViewModelTest {
         assertEquals(0, ui.misguidedOffers)
     }
 
-    // 버그 의심(코드는 고치지 않음): "지나침 복귀" 뒤 "다음 바통"을 누르면 switchRole 이 넣어 준 모의 대기 차(peer-cn1)가
-    // 내가 지나친 첫 자리(peer-owner#1, 비운 뒤 180초 동안 유효)로 곧바로 안내받는다(offer-3 → peer-cn1 · C구역 3번 줄).
-    // 그래서 이어서 내가 출차 임박이 돼도 C구역에 안내받을 차가 없어 "안내받는 차 0대"로 남는다.
-    // 안내 규칙 자체는 지켜지지만, ensureWaitingPeer 로 "다음 예고에 안내받을 차"를 보장하려던 의도와 어긋나 보인다.
-    @Ignore("버그 의심 재현: 지나침 복귀 뒤 다음 바통에서는 모의 대기 차가 남은 자리로 먼저 안내받아 내 예고의 안내가 0대가 된다")
+    // "지나침 복귀" 뒤 "다음 바통"을 누르면 switchRole 이 넣어 준 모의 대기 차(peer-cn1)는 내가 지나친 첫 자리
+    // (peer-owner#1, 비운 뒤 180초 동안 유효)로 곧바로 안내받는다(안내 규칙대로). ensureWaitingPeer 는 그 결과까지 보고
+    // 안내받지 않은 차(peer-cn2)를 한 대 더 넣어, 이어지는 내 예고에도 안내받을 차가 있게 한다.
     @Test
-    fun `재현 - 지나침 복귀 뒤 다음 바통으로 출차하면 내 예고를 안내받는 차가 있어야 한다`() {
+    fun `지나침 복귀 뒤 다음 바통으로 출차하면 내 예고를 안내받는 차가 있어야 한다`() {
         passThenParkAtNextSpot()
         vm.nextBaton()
         bench.boardAndAnnounce()
         vm.setParkingBrakeOn(false)
         assertEquals(DEPARTING, bench.state)
-        assertEquals(1, ui.guidedCars, "active=${ui.observe.activeLines} waiting=${ui.observe.waitingPeers}")
+        val context = "active=${ui.observe.activeLines} waiting=${ui.observe.waitingPeers}"
+        assertEquals(1, ui.guidedCars, context)
+
+        // 옛 자리(3번 줄) 안내와 내 자리(5번 줄) 안내가 각각 한 건씩이고, 서로 다른 차다.
+        assertEquals(2, ui.observe.activeLines.size, context)
+        val guidedCar = Regex("""→ (\S+) · C구역 (\d+)번 줄""")
+        val carByRow = ui.observe.activeLines.associate { line ->
+            val match = assertNotNull(guidedCar.find(line), line)
+            match.groupValues[2].toInt() to match.groupValues[1]
+        }
+        assertEquals(setOf(3, 5), carByRow.keys, context)
+        val oldSpotCar = carByRow.getValue(3)
+        val mySpotCar = carByRow.getValue(5)
+        assertNotEquals(oldSpotCar, mySpotCar, context)
+        assertTrue(oldSpotCar.startsWith("peer-cn") && mySpotCar.startsWith("peer-cn"), context)
+
+        // 내 자리를 비우면 상대 차가 주차하고 내 양보 기록이 오른다.
+        val parkedBefore = ui.parkedOffers
+        vm.setMoved(true)
+        assertEquals(VACATED, bench.state)
+        bench.waitUntil { it.yieldCount == 13 }
+        assertTrue(ui.observe.recordLines.any { it.contains("→ $mySpotCar · 주차 성사") }, "${ui.observe.recordLines}")
+        assertTrue(ui.parkedOffers > parkedBefore)
+        assertEquals(0, ui.misguidedOffers)
     }
 
     @Test
