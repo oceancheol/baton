@@ -74,6 +74,9 @@ data class ProbeResult(val changes: List<VehicleChange>, val recovered: Boolean)
  * - 조회 시작보다 앞선 순번의 구독 값은 그 답보다 오래된 관측이라 버린다.
  * - 주기적 확인의 답은 그 확인을 시작한 뒤에 구독 값이 들어온 신호에는 쓰지 않는다(구독 값이 더 새롭다).
  *   이미 더 나중 조회의 답을 반영한 신호도 건드리지 않는다. 오래된 조회가 최신 값과 중복 제거 기준을 덮어쓰지 못한다.
+ * - 주기적 확인에서 다른 신호는 읽히는데 한 신호만 읽지 못한 경우, 같은 신호가 연속 두 번 실패해야 일시 불가로 내보낸다
+ *   (첫 실패는 직전 값을 그대로 둔다). 하나도 읽지 못한 경우(전체 단절)와 기준값 조회는 한 번에 판정한다.
+ * - 주기적 확인의 답에는 확인을 시작할 때의 주차 세대를 붙인다. 확인하는 동안 새 주차가 시작됐으면 그 결과는 버린다.
  * - 직전에 내보낸 값과 같은 값은 변경으로 내보내지 않는다.
  */
 class SignalSequencer {
@@ -81,6 +84,7 @@ class SignalSequencer {
     private val latest = EnumMap<SignalKind, VehicleReading>(SignalKind::class.java)
     private val lastListenerSeq = EnumMap<SignalKind, Long>(SignalKind::class.java)
     private val baselineSeq = EnumMap<SignalKind, Long>(SignalKind::class.java)
+    private val probeFailures = EnumMap<SignalKind, Int>(SignalKind::class.java)
     private var open: ObservationStamp? = null
     private val buffer = ArrayList<VehicleChange>()
 
@@ -119,6 +123,7 @@ class SignalSequencer {
     fun completeBaseline(answers: Map<SignalKind, VehicleReading>): BaselineResult {
         val start = checkNotNull(open) { "열린 조회가 없다" }
         open = null
+        probeFailures.clear()
         for ((kind, reading) in answers) {
             latest[kind] = reading
             baselineSeq[kind] = start.seq
@@ -139,6 +144,10 @@ class SignalSequencer {
     /**
      * 주기적 확인의 답. 하나도 읽지 못했으면 모든 신호를 일시 불가로 돌리고, 끊겼다가 다시 읽히면 값은 반영하지 않고
      * [ProbeResult.recovered]로 알린다(호출한 쪽이 기준값을 다시 읽는다).
+     *
+     * [start]와 [answeredAt]의 주차 세대가 다르면(확인하는 동안 새 주차가 시작됐다) 이 결과는 통째로 버린다. 그래서 내보내는
+     * 변경의 세대는 언제나 확인을 시작할 때의 세대다. 다른 신호는 읽히는데 읽지 못한 신호는 [PROBE_FAILURES_BEFORE_UNAVAILABLE]번
+     * 연속으로 실패해야 일시 불가로 내보낸다.
      */
     @Synchronized
     fun onProbe(
@@ -147,14 +156,25 @@ class SignalSequencer {
         answeredAt: ObservationStamp,
     ): ProbeResult {
         check(open == null) { "현재 값 조회 중에는 주기적 확인을 하지 않는다" }
+        if (start.parkingGeneration != answeredAt.parkingGeneration) return ProbeResult(emptyList(), recovered = false)
         val aliveNow = alive(answers)
         if (aliveNow && status == LinkStatus.UNAVAILABLE) {
             status = LinkStatus.RECEIVING
             return ProbeResult(emptyList(), recovered = true)
         }
         status = if (aliveNow) LinkStatus.RECEIVING else LinkStatus.UNAVAILABLE
+        if (!aliveNow) probeFailures.clear() // 전체 단절은 바로 판정한다
         val changes = ArrayList<VehicleChange>()
         for ((kind, reading) in answers) {
+            if (aliveNow) {
+                if (reading.availability == SignalAvailability.UNAVAILABLE) {
+                    val failures = (probeFailures[kind] ?: 0) + 1
+                    probeFailures[kind] = failures
+                    if (failures < PROBE_FAILURES_BEFORE_UNAVAILABLE) continue // 첫 실패: 직전 값을 그대로 둔다
+                } else {
+                    probeFailures.remove(kind)
+                }
+            }
             if ((lastListenerSeq[kind] ?: 0L) > start.seq) continue // 확인을 시작한 뒤의 구독 값이 더 새롭다
             if ((baselineSeq[kind] ?: 0L) > start.seq) continue // 더 나중 조회의 답이 이미 반영됐다
             baselineSeq[kind] = start.seq
@@ -183,4 +203,9 @@ class SignalSequencer {
 
     private fun alive(answers: Map<SignalKind, VehicleReading>): Boolean =
         answers.values.any { it.availability == SignalAvailability.AVAILABLE }
+
+    companion object {
+        /** 링크가 살아 있을 때 신호 하나를 일시 불가로 내보내기까지의 연속 실패 횟수. */
+        const val PROBE_FAILURES_BEFORE_UNAVAILABLE = 2
+    }
 }

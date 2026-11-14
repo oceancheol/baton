@@ -29,6 +29,7 @@ import app.baton.core.signal.SignalKind
 import app.baton.core.signal.SignalSnapshot
 import app.baton.parking.BuildConfig
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,7 +78,8 @@ import kotlin.coroutines.resume
  *    답을 기준값(스냅샷)으로 돌려주고, 조회하는 동안 모아 둔 변경은 그 뒤에 [events]로 내보낸다.
  *    조회는 한 번에 하나만 돈다(주기적 확인과도 겹치지 않는다).
  * 2. 콜백은 들어온 순간에 순번·관측 시각·주차 세대를 찍고, 화면 스레드로 옮겨 처리할 때까지 그 표를 그대로 쓴다.
- * 3. [PROBE_INTERVAL_MILLIS]마다 현재 값을 다시 묻는다. 하나도 읽지 못하면 차량 신호를 일시 불가로 내보내고
+ * 3. [PROBE_INTERVAL_MILLIS]마다 현재 값을 다시 묻는다. 한 신호만 읽지 못하면 연속 두 번째 실패부터 그 신호를 일시 불가로
+ *    내보낸다. 하나도 읽지 못하면 차량 신호를 일시 불가로 내보내고
  *    [link]를 연결 불가로 바꾼다. 다시 읽히면 [link]가 수신 중으로 돌아오고, 받는 쪽이 기준값을 다시 읽는다.
  */
 class PleosSignalSource private constructor(
@@ -96,6 +98,8 @@ class PleosSignalSource private constructor(
     override val capabilities: SignalCapabilities = SignalCapabilities.ALL
 
     override val beltExcludedForDemo: Boolean = profile.beltExcludedForDemo
+
+    override val initialSeatTrusted: Boolean = profile.trustInitialSeatOccupancy
 
     override val environmentNotice: String? =
         if (profile.useSeatOccupancy) null
@@ -417,7 +421,13 @@ class PleosSignalSource private constructor(
         probeJob = scope.launch {
             while (isActive) {
                 delay(PROBE_INTERVAL_MILLIS)
-                probeOnce()
+                try {
+                    probeOnce()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "주기적 확인 실패 → 다음 주기에 다시 확인", e)
+                }
             }
         }
     }
@@ -432,6 +442,7 @@ class PleosSignalSource private constructor(
         if (!wasDown) registerMissing()
         val start = stampNow()
         val answers = queryActive()
+        // 확인하는 동안 새 주차가 시작됐으면(두 표의 세대가 다르면) 이 결과는 순번 정리에서 버려진다.
         val result = sequencer.onProbe(start, answers, stampNow())
         result.changes.forEach(::emit)
         if (sequencer.status == LinkStatus.UNAVAILABLE) reconnect()

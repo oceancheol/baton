@@ -228,4 +228,72 @@ class SignalSequencerTest {
         assertTrue(result.changes.isEmpty())
         assertEquals(on(true), seq.latestOf(SEAT))
     }
+
+    @Test
+    fun `다른 신호는 읽히는데 한 신호만 한 번 읽지 못하면 직전 값을 그대로 두고 연속 두 번째에 일시 불가로 내보낸다`() {
+        baseline(DOOR to on(false), SEAT to on(true))
+        val seatLost = mapOf(DOOR to on(false), SEAT to VehicleReading.UNAVAILABLE)
+
+        val first = seq.onProbe(stamp(), seatLost, stamp())
+        assertTrue(first.changes.isEmpty(), "첫 실패로는 예고를 취소시키지 않는다")
+        assertEquals(on(true), seq.latestOf(SEAT))
+        assertEquals(LinkStatus.RECEIVING, seq.status)
+
+        val second = seq.onProbe(stamp(), seatLost, stamp())
+        assertEquals(listOf(SEAT), second.changes.map { it.kind })
+        assertEquals(VehicleReading.UNAVAILABLE, second.changes.single().reading)
+        assertEquals(LinkStatus.RECEIVING, seq.status)
+    }
+
+    @Test
+    fun `한 번 실패한 뒤 다시 읽히면 실패 횟수를 처음부터 다시 센다`() {
+        baseline(DOOR to on(false), SEAT to on(true))
+        val seatLost = mapOf(DOOR to on(false), SEAT to VehicleReading.UNAVAILABLE)
+        val allRead = mapOf(DOOR to on(false), SEAT to on(true))
+
+        assertTrue(seq.onProbe(stamp(), seatLost, stamp()).changes.isEmpty())
+        assertTrue(seq.onProbe(stamp(), allRead, stamp()).changes.isEmpty())
+        assertTrue(seq.onProbe(stamp(), seatLost, stamp()).changes.isEmpty(), "연속이 아니면 일시 불가로 내보내지 않는다")
+        assertEquals(on(true), seq.latestOf(SEAT))
+    }
+
+    @Test
+    fun `첫 실패로 값을 그대로 둔 신호도 그 뒤의 구독 값은 평소대로 받는다`() {
+        baseline(DOOR to on(false), SEAT to on(true))
+        seq.onProbe(stamp(), mapOf(DOOR to on(false), SEAT to VehicleReading.UNAVAILABLE), stamp())
+        assertEquals(on(false), seq.onListener(SEAT, on(false), stamp())?.reading)
+    }
+
+    @Test
+    fun `주기적 확인 도중 새 주차가 시작되면 그 결과는 버린다 - 내보내는 변경의 세대는 확인을 시작할 때의 세대다`() {
+        baseline(DOOR to on(false), SEAT to on(false))
+
+        val oldStart = stamp() // 세대 1 에서 확인을 시작했다
+        generation = 2L // 답을 기다리는 동안 새 주차
+        val dropped = seq.onProbe(oldStart, mapOf(DOOR to on(false), SEAT to on(true)), stamp())
+        assertTrue(dropped.changes.isEmpty(), "옛 주차에서 시작한 확인의 답을 새 세대로 내보내지 않는다")
+        assertEquals(on(false), seq.latestOf(SEAT))
+
+        // 다음 확인은 새 세대에서 시작하고, 그 세대로 나간다.
+        val start = stamp()
+        val next = seq.onProbe(start, mapOf(DOOR to on(false), SEAT to on(true)), stamp())
+        assertEquals(listOf(SEAT), next.changes.map { it.kind })
+        assertEquals(start.parkingGeneration, next.changes.single().toEvent().parkingGeneration)
+        assertEquals(2L, next.changes.single().toEvent().parkingGeneration)
+    }
+
+    @Test
+    fun `확인 도중 새 주차가 시작되면 전체 무응답이어도 그 확인으로는 단절을 판정하지 않는다`() {
+        baseline(SEAT to on(true))
+        val oldStart = stamp()
+        generation = 2L
+        val dropped = seq.onProbe(oldStart, mapOf(SEAT to VehicleReading.UNAVAILABLE), stamp())
+        assertTrue(dropped.changes.isEmpty())
+        assertEquals(LinkStatus.RECEIVING, seq.status)
+
+        // 다음 확인에서도 읽지 못하면 그때 단절로 판정한다.
+        val next = seq.onProbe(stamp(), mapOf(SEAT to VehicleReading.UNAVAILABLE), stamp())
+        assertEquals(LinkStatus.UNAVAILABLE, seq.status)
+        assertEquals(2L, next.changes.single().toEvent().parkingGeneration)
+    }
 }

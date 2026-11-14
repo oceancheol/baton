@@ -22,6 +22,12 @@ interface BatonSignalSource : SignalSource {
     /** 안전벨트를 시연 설정으로 판정에서 뺐는지(화면에 "미지원" 대신 사실대로 적는다). */
     val beltExcludedForDemo: Boolean get() = false
 
+    /**
+     * 앱이 처음 연결될 때 읽은 착좌 값을 "이미 앉아 있음"으로 믿을 수 있는지. false 면 처음 연결 복원에서도
+     * 탑승으로 복원하지 않고(기준값으로만 쓴다) 문 여닫힘을 기다린다.
+     */
+    val initialSeatTrusted: Boolean get() = true
+
     /** 이 환경 때문에 자동 예고를 끈 이유. 없으면 null. */
     val environmentNotice: String? get() = null
 

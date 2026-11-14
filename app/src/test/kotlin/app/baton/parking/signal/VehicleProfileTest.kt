@@ -17,6 +17,7 @@ class VehicleProfileTest {
         assertTrue(profile.useSeatOccupancy && profile.seatOccupancyInverted)
         assertTrue(profile.useParkingBrakeTelltale)
         assertTrue(profile.beltExcludedForDemo)
+        assertFalse(profile.trustInitialSeatOccupancy, "부팅 직후의 미설정 좌석 값이 앉음으로 읽힌다")
     }
 
     @Test
@@ -36,6 +37,7 @@ class VehicleProfileTest {
             assertFalse(profile.seatOccupancyInverted)
             assertFalse(profile.useParkingBrakeTelltale)
             assertFalse(profile.beltExcludedForDemo)
+            assertFalse(profile.trustInitialSeatOccupancy)
         }
     }
 }

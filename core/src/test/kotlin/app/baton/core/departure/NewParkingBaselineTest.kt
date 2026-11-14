@@ -31,13 +31,17 @@ class NewParkingBaselineTest {
         return sm
     }
 
-    private fun DepartureStateMachine.restoreSeated(doorOpen: Boolean = false): List<DepartureLogEvent> {
+    private fun DepartureStateMachine.restoreSeated(
+        doorOpen: Boolean = false,
+        reconnect: Boolean = false,
+    ): List<DepartureLogEvent> {
         val request = newSnapshotRequest()
         clock.advanceSeconds(1)
         return restore(
             snapshotOf(clock, doorOpen = doorOpen, seated = true)
                 .copy(seatBelt = SignalReading.unsupported())
                 .answering(request),
+            reconnect,
         )
     }
 
@@ -58,14 +62,87 @@ class NewParkingBaselineTest {
     }
 
     @Test
-    fun `기준값을 받은 뒤의 다음 복원은 다시 연결 복원이다 - 앉아 있으면 탑승으로 복원한다`() {
+    fun `기준값을 받은 뒤 재연결 표시 없이 넣는 다음 복원은 연결 복원이다 - 앉아 있으면 탑승으로 복원한다`() {
         val sm = announcingWithoutBelt()
         sm.startNewParking(awaitBaseline = true)
         sm.restoreSeated()
         assertEquals(PARKED, sm.currentState)
 
-        val produced = sm.restoreSeated() // 예: 서비스가 끊겼다 다시 붙어 현재 값을 다시 읽음
+        // 기준값 대기는 한 번의 복원으로 끝난다. 실행 중 재연결은 호출하는 쪽이 reconnect = true 로 구분한다(아래 시험).
+        val produced = sm.restoreSeated()
         assertEquals(TransitionReason.RESTORED_OCCUPIED, produced.first { it.isTransition }.reason)
+        assertEquals(ANNOUNCING, sm.currentState)
+    }
+
+    @Test
+    fun `재연결 복원은 앉아만 있어서는 예고하지 않고 문 여닫힘 뒤에 예고한다`() {
+        val sm = announcingWithoutBelt()
+        // 서비스 단절: 착좌를 읽지 못해 예고가 취소된다.
+        sm.onSignal(AvailabilityChanged(SignalKind.SEAT, SignalAvailability.UNAVAILABLE))
+        assertEquals(PARKED, sm.currentState)
+
+        val produced = sm.restoreSeated(reconnect = true)
+        assertEquals(PARKED, sm.currentState, "끊긴 동안 취소된 예고가 복구만으로 다시 시작되지 않는다")
+        assertTrue(produced.none { it.isTransition })
+        clock.advanceSeconds(600)
+        sm.tick()
+        assertEquals(PARKED, sm.currentState)
+
+        sm.doorCycle(clock)
+        assertEquals(ANNOUNCING, sm.currentState)
+    }
+
+    @Test
+    fun `차량 신호가 모두 끊겼다 다시 붙으면 - 끊긴 동안 대체 규칙으로 탑승 단계가 됐어도 앉아만 있어서는 예고하지 않는다`() {
+        val sm = announcingWithoutBelt()
+        // 서비스 단절: 문·착좌를 차례로 읽지 못한다. 문을 읽지 못하면 "문 없이 착좌로 판정"하는 대체 규칙이 걸린다.
+        sm.onSignal(AvailabilityChanged(SignalKind.DOOR, SignalAvailability.UNAVAILABLE))
+        val lost = sm.onSignal(AvailabilityChanged(SignalKind.SEAT, SignalAvailability.UNAVAILABLE))
+        assertEquals(TransitionReason.MIN_SIGNAL_LOST, lost.first { it.isTransition }.reason)
+        assertEquals(BOARDING, sm.currentState)
+
+        val produced = sm.restoreSeated(reconnect = true)
+        assertEquals(TransitionReason.RECONNECTED_OCCUPIED, produced.single { it.isTransition }.reason)
+        assertEquals(PARKED, sm.currentState)
+        clock.advanceSeconds(600)
+        sm.tick()
+        assertEquals(PARKED, sm.currentState)
+
+        sm.doorCycle(clock)
+        assertEquals(ANNOUNCING, sm.currentState)
+    }
+
+    @Test
+    fun `재연결 복원 때 내려 있으면 탑승 단계를 그대로 둔다 - 그 뒤의 착좌는 본 변화라 예고한다`() {
+        val sm = parkedMachine(clock, SignalCapabilities(seatBelt = false))
+        sm.doorCycle(clock)
+        assertEquals(BOARDING, sm.currentState)
+        val request = sm.newSnapshotRequest()
+        clock.advanceSeconds(1)
+        sm.restore(snapshotOf(clock).copy(seatBelt = SignalReading.unsupported()).answering(request), reconnect = true)
+        assertEquals(BOARDING, sm.currentState)
+        sm.onSignal(DriverSeat(occupied = true))
+        assertEquals(ANNOUNCING, sm.currentState)
+    }
+
+    @Test
+    fun `새 주차로 주차 중일 때의 재연결 복원도 앉아 있다는 이유로 탑승으로 복원하지 않는다`() {
+        val sm = announcingWithoutBelt()
+        sm.startNewParking(awaitBaseline = true)
+        sm.restoreSeated()
+        assertEquals(PARKED, sm.currentState)
+
+        sm.restoreSeated(reconnect = true)
+        assertEquals(PARKED, sm.currentState)
+        sm.doorCycle(clock)
+        assertEquals(ANNOUNCING, sm.currentState)
+    }
+
+    @Test
+    fun `재연결 복원은 지금 상태를 유지한다 - 예고 중이면 예고 중 그대로다`() {
+        val sm = announcingWithoutBelt()
+        val produced = sm.restoreSeated(reconnect = true)
+        assertTrue(produced.none { it.isTransition })
         assertEquals(ANNOUNCING, sm.currentState)
     }
 

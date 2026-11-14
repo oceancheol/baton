@@ -3,6 +3,7 @@ package app.baton.parking
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.baton.core.Clock
 import app.baton.core.SteppedClock
 import app.baton.core.departure.DepartureLogEvent
 import app.baton.core.departure.DepartureSnapshot
@@ -18,6 +19,7 @@ import app.baton.core.match.MockPeerService
 import app.baton.core.match.ZoneSummary
 import app.baton.core.signal.LocationQuality
 import app.baton.core.signal.SignalAvailability
+import app.baton.core.signal.SignalEvent
 import app.baton.core.signal.SignalReading
 import app.baton.parking.signal.BatonSignalSource
 import app.baton.parking.signal.FakeSignalSource
@@ -127,6 +129,8 @@ class BatonViewModel internal constructor(
     application: Application,
     /** 시계 주입 지점. 앱은 아래 생성자로 기본 시계를 쓰고, 단위 시험에서만 가짜 시각의 시계를 넣는다. */
     private val demoClock: DemoClock,
+    /** 신호 소스 주입 지점. 앱은 기본값([SignalSourceProvider])을 쓰고, 단위 시험에서만 가짜 소스를 넣는다. */
+    sourceFactory: (Application, Clock) -> BatonSignalSource = SignalSourceProvider::create,
 ) : AndroidViewModel(application) {
     constructor(application: Application) : this(application, DemoClock())
 
@@ -137,7 +141,7 @@ class BatonViewModel internal constructor(
     // 신호 소스 주입 지점은 SignalSourceProvider 한 곳이다. 구현 클래스는 보지 않고 인터페이스만 쓴다.
     // 소스에는 바탕 시계를 준다: 소스는 SDK 콜백 스레드에서도 시각을 읽으므로, 모의 세계를 되밟는 동안 잠깐 고정되는
     // 시각(SteppedClock)이 관측 시각에 섞이지 않게 한다. 화면 스레드에서는 두 시계의 값이 같다.
-    private val signalSource: BatonSignalSource = SignalSourceProvider.create(application, demoClock)
+    private val signalSource: BatonSignalSource = sourceFactory(application, demoClock)
 
     /** 스위치로 조작하는 모의 차량 신호. 실제 차량 신호 소스면 null. */
     private val fakeSource: FakeSignalSource? = signalSource.manualSignals
@@ -148,6 +152,15 @@ class BatonViewModel internal constructor(
     /** 진행 중인 현재 값 조회(실제 신호 소스). 새로 시작하면 앞의 것은 취소한다: 조회는 한 번에 하나다. */
     private var restoreJob: Job? = null
     private var parkingStarted = false
+
+    /**
+     * 실제 신호 소스에서 "앱이 처음 연결될 때의 복원"을 아직 하지 못했다. 값을 읽어 한 번 복원했거나 새 주차를 시작했으면 false.
+     * 그 뒤의 복원(끊겼다 다시 붙음)은 재연결 복원이다: 상태를 그대로 두고 신호 값만 다시 맞춘다.
+     */
+    private var connectionRestorePending = true
+
+    /** 착좌 값이 바뀌는 것을 한 번이라도 봤는지(초기 조회 값만 있는 동안에는 화면에 미확정으로 적는다). */
+    private var seatChangeSeen = false
 
     private val machine = DepartureStateMachine(clock, signalSource.capabilities)
     private var coordinator = GuidanceCoordinator(clock, matchConfig)
@@ -187,6 +200,7 @@ class BatonViewModel internal constructor(
             if (fakeSource != null) restoreFromSource()
             refresh()
             signalSource.events.collect { event ->
+                if (event is SignalEvent.DriverSeat) seatChangeSeen = true
                 if (role == Role.LEAVING) applyDeparture(machine.onSignal(event))
                 refresh()
             }
@@ -522,6 +536,7 @@ class BatonViewModel internal constructor(
             // - 새 주차(다음 바통 / 처음부터): 방금 주차한 운전자가 아직 앉아 있을 뿐이므로 탑승으로 세지 않는다.
             //   상태기계가 기준값을 받을 때까지 기다렸다가, 문 여닫힘이나 하차 후 재착좌를 본 뒤에 판정한다.
             applyDeparture(machine.startNewParking(awaitBaseline = parkingStarted))
+            if (parkingStarted) connectionRestorePending = false
             parkingStarted = true
             val generation = machine.snapshot.value.parkingGeneration
             // 이 뒤로 소스가 받는 관측에는 새 세대가 붙는다. 그 전에 받아 아직 처리하지 않은 관측은 옛 세대라 거부된다.
@@ -553,7 +568,12 @@ class BatonViewModel internal constructor(
     private suspend fun restoreFromSource() {
         val request = machine.newSnapshotRequest()
         val snapshot = signalSource.currentSnapshot().answering(request)
-        applyDeparture(machine.restore(snapshot))
+        // 이미 앉아 있으면 탑승으로 복원하는 것은 앱이 처음 연결될 때뿐이다. 실행 중에 끊겼다 다시 붙은 복원은
+        // 앉아 있어도 PARKED 에 머문다(문 여닫힘 또는 하차 후 재착좌를 기다린다).
+        // 처음 읽은 착좌 값을 믿을 수 없는 환경(에뮬레이터 부팅 직후의 미설정 값)에서는 처음 연결 복원도 같은 규칙으로 다룬다.
+        val reconnect = fakeSource == null && (!connectionRestorePending || !signalSource.initialSeatTrusted)
+        applyDeparture(machine.restore(snapshot, reconnect))
+        if (signalSource.link.value == LinkStatus.RECEIVING) connectionRestorePending = false
     }
 
     private fun enterLot() {
@@ -730,9 +750,15 @@ class BatonViewModel internal constructor(
                 belted -> "벨트 맴"
                 else -> "벨트 안 맴"
             }
+            val seatText = when {
+                !seated -> "비어 있음"
+                // 처음 조회한 값뿐이고 믿을 수 없는 환경이면(미설정이 앉음으로 읽힌다) 사실대로 적는다.
+                !signalSource.initialSeatTrusted && !seatChangeSeen -> "초기값 미확정(앉음으로 읽힘)"
+                else -> "앉음"
+            }
             SignalLine(
                 "착좌 · 안전벨트",
-                "${if (seated) "앉음" else "비어 있음"} · $beltText",
+                "$seatText · $beltText",
                 on = seated && (belted || s.seatBelt.excluded),
                 muted = false,
             )

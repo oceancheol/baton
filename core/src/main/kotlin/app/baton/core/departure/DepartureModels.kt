@@ -16,6 +16,7 @@ enum class TransitionReason(val label: String) {
     DOOR_OPEN_CLOSE("운전석 문 열림 → 닫힘"),
     DOOR_UNSUPPORTED("문 신호를 읽지 못함: 착좌로 바로 판정"),
     RESTORED_OCCUPIED("구독 시작 때 이미 착좌: 탑승한 상태로 복원"),
+    RECONNECTED_OCCUPIED("다시 연결됐을 때 이미 착좌: 문 여닫힘(문 신호가 없으면 하차 후 재착좌)을 기다림"),
     SEATED_AND_BELTED("운전석 착좌 + 안전벨트 체결"),
     SEATED("운전석 착좌 (벨트 신호를 읽지 못함: 착좌만 사용)"),
     PARKING_BRAKE_RELEASED("주차 브레이크 경고등 꺼짐"),

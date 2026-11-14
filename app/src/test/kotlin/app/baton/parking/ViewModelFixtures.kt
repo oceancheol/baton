@@ -2,7 +2,9 @@ package app.baton.parking
 
 import android.app.Application
 import androidx.lifecycle.viewModelScope
+import app.baton.core.Clock
 import app.baton.core.departure.DepartureState
+import app.baton.parking.signal.BatonSignalSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -19,14 +21,15 @@ import kotlinx.coroutines.test.setMain
  * - 뷰모델의 진행 반복은 끝나지 않으므로 advanceUntilIdle 은 쓰지 않는다. 시험이 끝나면 [close]로 멈춘다.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class ViewModelBench {
+class ViewModelBench(sourceFactory: ((Application, Clock) -> BatonSignalSource)? = null) {
     private val scheduler = TestCoroutineScheduler()
 
     val vm: BatonViewModel
 
     init {
         Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
-        vm = BatonViewModel(Application(), DemoClock { CLOCK_BASE_MILLIS + scheduler.currentTime })
+        val clock = DemoClock { CLOCK_BASE_MILLIS + scheduler.currentTime }
+        vm = if (sourceFactory == null) BatonViewModel(Application(), clock) else BatonViewModel(Application(), clock, sourceFactory)
     }
 
     /** 지금 화면이 읽는 상태. */

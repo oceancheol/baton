@@ -125,9 +125,15 @@ class DepartureStateMachine(
      * 새 주차의 기준값을 기다리는 중이면(`startNewParking(awaitBaseline = true)`) 이 복원은 "최초 연결 복원"이 아니라
      * "새 주차의 기준값"이다. 이때는 앉아 있어도 탑승으로 복원하지 않는다: 방금 주차한 운전자가 아직 앉아 있을 뿐이므로
      * 문 여닫힘(문 신호가 없으면 하차 후 재착좌)을 기다린다.
+     *
+     * [reconnect]가 true 이면 실행 중에 끊겼다 다시 붙어 읽은 값이다(앱이 처음 연결될 때의 복원이 아니다).
+     * 지금 상태를 그대로 두고 신호 값만 다시 맞춘다: PARKED 였으면 앉아 있어도 탑승으로 복원하지 않고, 새 주차의 기준값과
+     * 같이 문 여닫힘(문 신호가 없으면 하차 후 재착좌)을 기다린다. BOARDING 이었고 이미 앉아 있으면 PARKED 로 되돌린다
+     * (끊긴 동안 문 신호를 읽지 못해 대체 규칙으로 BOARDING 이 됐을 수 있다). 끊긴 동안 취소된 예고가 복구만으로 다시
+     * 시작되지 않는다.
      */
     @Synchronized
-    fun restore(snapshot: SignalSnapshot): List<DepartureLogEvent> = input {
+    fun restore(snapshot: SignalSnapshot, reconnect: Boolean = false): List<DepartureLogEvent> = input {
         checkTimeouts()
         val previousQuality = location.usableValue?.quality
         if (applyLevels(snapshot) == null) {
@@ -140,8 +146,8 @@ class DepartureStateMachine(
         when (state) {
             DepartureState.PARKED -> {
                 doorOpenedWhileParked = value(SignalKind.DOOR) == true
-                if (newParkingBaseline) {
-                    // 새 주차의 기준값: 남아 있는 착좌는 탑승으로 세지 않는다.
+                if (newParkingBaseline || reconnect) {
+                    // 새 주차의 기준값·재연결 복원: 남아 있는 착좌는 탑승으로 세지 않는다.
                     doorlessArmed = value(SignalKind.SEAT) != true
                 } else if (value(SignalKind.SEAT) == true) {
                     restoredOccupied = true
@@ -152,7 +158,11 @@ class DepartureStateMachine(
                 doorReopenedAt = if (value(SignalKind.DOOR) == true) doorReopenedAt ?: now else null
                 seatVacatedAt = if (value(SignalKind.SEAT) == false) seatVacatedAt ?: now else null
             }
-            DepartureState.BOARDING, DepartureState.VACATED -> Unit
+            DepartureState.BOARDING ->
+                // 끊긴 동안에는 문 신호도 읽지 못해 "문 없이 착좌로 판정"하는 대체 규칙으로 BOARDING 에 와 있을 수 있다.
+                // 다시 붙었을 때 이미 앉아 있으면 그 착좌는 본 변화가 아니므로 PARKED 로 되돌려 문 여닫힘(하차 후 재착좌)을 기다린다.
+                if (reconnect && value(SignalKind.SEAT) == true) cancelToParked(TransitionReason.RECONNECTED_OCCUPIED)
+            DepartureState.VACATED -> Unit
         }
         note(TransitionReason.RESTORED)
         evaluate()

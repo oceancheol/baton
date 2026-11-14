@@ -18,6 +18,13 @@ data class VehicleProfile(
     val useParkingBrakeTelltale: Boolean,
     /** 안전벨트를 시연 설정으로 뺄지(에뮬레이터의 Virtual Console 에 벨트 조작이 없다). false 면 SDK 지원 확인 결과를 따른다. */
     val beltExcludedForDemo: Boolean,
+    /**
+     * 앱이 처음 연결될 때 읽은 착좌 값을 "이미 앉아 있음"으로 믿을지.
+     * 에뮬레이터를 새로 부팅한 직후에는 Virtual Console 의 좌석 값이 미설정이라 SDK 가 false 를 주고, 뒤집어 읽으면
+     * "앉음"이 된다(Boolean 값으로는 미설정과 앉음을 가릴 수 없다). 그래서 이 환경에서는 믿지 않는다:
+     * 처음 연결 복원에서도 탑승으로 복원하지 않고 문 여닫힘을 기다린다.
+     */
+    val trustInitialSeatOccupancy: Boolean,
 ) {
     companion object {
         private const val PLEOS_EMULATOR_FINGERPRINT_PREFIX = "Pleos/crp_avd"
@@ -30,6 +37,7 @@ data class VehicleProfile(
             seatOccupancyInverted = true,
             useParkingBrakeTelltale = true,
             beltExcludedForDemo = true,
+            trustInitialSeatOccupancy = false,
         )
 
         /** 확인하지 못한 환경. */
@@ -40,6 +48,7 @@ data class VehicleProfile(
             seatOccupancyInverted = false,
             useParkingBrakeTelltale = false,
             beltExcludedForDemo = false,
+            trustInitialSeatOccupancy = false,
         )
 
         fun forFingerprint(fingerprint: String?): VehicleProfile =
