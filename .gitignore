@@ -1,0 +1,22 @@
+# Gradle / build
+.gradle/
+build/
+**/build/
+local.properties
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# 서명 키 · 비밀값
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*
+
+# 내려받은 에뮬레이터 이미지 · 내부 검수 기록
+.dl/
+docs/review/
